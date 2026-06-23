@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { App } from "./App";
@@ -19,35 +19,46 @@ function renderApp(initialEntry = "/") {
   );
 }
 
-describe("App broker terminal shell", () => {
-  it("renders reference-style navigation and top command controls", () => {
+describe("App Xirang shell", () => {
+  it("renders the Xirang top navigation and utility controls", () => {
     renderApp();
 
-    expect(screen.getByText("市场总览")).toBeTruthy();
-    expect(screen.queryByText("市场")).toBeNull();
-    expect(screen.getByText("AI 投顾")).toBeTruthy();
-    expect(screen.getByPlaceholderText("搜索股票 / 指数 / 板块 / 资讯")).toBeTruthy();
-    expect(screen.getByDisplayValue("2024-06-20")).toBeTruthy();
-    expect(screen.getByText("自定义视图")).toBeTruthy();
+    expect(screen.getAllByText("息壤投研").length).toBeGreaterThan(0);
+    const primaryNav = screen.getByLabelText("主导航");
+    expect(within(primaryNav).getByRole("link", { name: "市场" }).getAttribute("href")).toBe("/market");
+    expect(within(primaryNav).getByRole("link", { name: "宏观" }).getAttribute("href")).toBe("/macro");
+    expect(within(primaryNav).getByRole("link", { name: "选股" }).getAttribute("href")).toBe("/stocks");
+    expect(within(primaryNav).getByRole("link", { name: "我的持仓" }).getAttribute("href")).toBe("/portfolio");
+    expect(within(primaryNav).getByRole("link", { name: "检索" }).getAttribute("href")).toBe("/search");
+    expect(screen.getByPlaceholderText("搜索股票、持仓、标签...")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "时光机" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "切换主题" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "组合沙箱" }).getAttribute("href")).toBe("/portfolio");
   });
 
-  it("redirects the removed market page route back to the overview", async () => {
-    renderApp("/macro");
+  it("redirects the root route to the market overview", async () => {
+    renderApp("/");
 
-    expect(await screen.findByText("市场全景")).toBeTruthy();
-    expect(screen.queryByText("宏观与跨市场观察")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "市场全景" })).toBeTruthy();
   });
 
-  it("opens local menus for quick actions, notifications, and user profile", () => {
-    renderApp();
+  it("renders the stock center on /stocks", async () => {
+    renderApp("/stocks");
 
-    fireEvent.click(screen.getByText("快捷操作"));
-    expect(screen.getByText("刷新行情")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "选股中心" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /工作台/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /选股器/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /ETF/ })).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByLabelText("通知"));
-    expect(screen.getByText("暂无新的真实告警")).toBeTruthy();
+  it("opens and closes the mobile navigation menu", () => {
+    renderApp("/market");
 
-    fireEvent.click(screen.getByText("投资者Z"));
-    expect(screen.getByText("本地研究终端")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "打开菜单" }));
+    const mobileNav = screen.getByLabelText("移动导航");
+    expect(within(mobileNav).getByRole("link", { name: "我的持仓" }).getAttribute("href")).toBe("/portfolio");
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭菜单" }));
+    expect(screen.queryByLabelText("移动导航")).toBeNull();
   });
 });

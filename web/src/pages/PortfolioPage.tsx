@@ -76,20 +76,20 @@ export function PortfolioPage() {
   }
 
   return (
-    <div className="page-stack">
-      <section className="section-head">
-        <div>
+    <div className="page-stack portfolio-page">
+      <section className="section-head portfolio-hero">
+        <div className="portfolio-hero-copy">
           <div className="eyebrow">LOCAL PORTFOLIO</div>
           <h2>组合分析</h2>
           <p>持仓仅保存在本地浏览器。后端只接收当前请求用于计算、OCR 或 AI 报告上下文。</p>
         </div>
-        <div className="button-cluster">
-          <label className="terminal-button ghost">
+        <div className="button-cluster portfolio-import-controls">
+          <label className="terminal-button ghost portfolio-import-action">
             <FileUp size={16} />
             CSV
             <input hidden type="file" accept=".csv,text/csv" onChange={onCsvFile} />
           </label>
-          <label className="terminal-button ghost">
+          <label className="terminal-button ghost portfolio-import-action">
             <UploadCloud size={16} />
             截图AI识别
             <input hidden type="file" accept="image/*" onChange={onOcrFile} />
@@ -97,7 +97,7 @@ export function PortfolioPage() {
         </div>
       </section>
 
-      <div className="metric-grid">
+      <div className="metric-grid portfolio-metrics">
         <MetricCard label="总市值" value={formatNumber(analysis.data?.total_value || 0)} detail="后端免费行情刷新" />
         <MetricCard
           label="浮动盈亏"
@@ -109,15 +109,15 @@ export function PortfolioPage() {
         <MetricCard label="最大权重" value={topWeight ? `${formatNumber(topWeight.weight * 100)}%` : "--"} detail={topWeight?.name || "--"} />
       </div>
 
-      <div className="two-column">
-        <section className="data-panel">
-          <div className="panel-head">
+      <div className="two-column portfolio-tool-grid">
+        <section className="data-panel portfolio-entry-panel">
+          <div className="panel-head portfolio-panel-head">
             <div>
               <h3>新增持仓</h3>
               <span>手动录入</span>
             </div>
           </div>
-          <form className="position-form" onSubmit={submit}>
+          <form className="position-form portfolio-position-form" onSubmit={submit}>
             <input value={draft.symbol} onChange={(event) => setDraft({ ...draft, symbol: event.target.value })} placeholder="代码" />
             <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="名称" />
             <select
@@ -133,30 +133,30 @@ export function PortfolioPage() {
             <input type="number" value={draft.quantity} onChange={(event) => setDraft({ ...draft, quantity: Number(event.target.value) })} />
             <input type="number" value={draft.cost_price} onChange={(event) => setDraft({ ...draft, cost_price: Number(event.target.value) })} />
             <input type="number" value={draft.current_price} onChange={(event) => setDraft({ ...draft, current_price: Number(event.target.value) })} />
-            <button className="terminal-button" type="submit">
+            <button className="terminal-button portfolio-submit-action" type="submit">
               <Plus size={16} />
               添加
             </button>
           </form>
-          {ocrNotice ? <p className="notice-text">{ocrNotice}</p> : null}
+          {ocrNotice ? <p className="notice-text portfolio-notice">{ocrNotice}</p> : null}
         </section>
 
-        <section className="data-panel">
-          <div className="panel-head">
+        <section className="data-panel portfolio-risk-panel">
+          <div className="panel-head portfolio-panel-head">
             <div>
               <h3>风险提示</h3>
               <span>{analysis.data?.disclaimer || "仅供研究参考"}</span>
             </div>
           </div>
-          <div className="risk-list">
+          <div className="risk-list portfolio-risk-list">
             {analysis.data?.risks.map((risk) => (
-              <div className={`risk-item ${risk.level}`} key={risk.title}>
+              <div className={`risk-item portfolio-risk-item ${risk.level}`} key={risk.title}>
                 <strong>{risk.title}</strong>
                 <span>{risk.detail}</span>
               </div>
             ))}
             {analysis.data?.suggestions.map((item) => (
-              <div className="risk-item" key={item}>
+              <div className="risk-item portfolio-risk-item" key={item}>
                 <strong>观察建议</strong>
                 <span>{item}</span>
               </div>
@@ -165,18 +165,18 @@ export function PortfolioPage() {
         </section>
       </div>
 
-      <section className="data-panel">
-        <div className="panel-head">
+      <section className="data-panel portfolio-holdings-panel">
+        <div className="panel-head portfolio-panel-head portfolio-holdings-head">
           <div>
             <h3>持仓明细</h3>
             <span>{positions.length} 条本地记录</span>
           </div>
-          <button className="terminal-button ghost" onClick={clear}>
+          <button className="terminal-button ghost portfolio-clear-action" onClick={clear}>
             清空
           </button>
         </div>
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap portfolio-table-wrap">
+          <table className="portfolio-table">
             <thead>
               <tr>
                 <th>代码</th>
