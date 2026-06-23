@@ -1,1 +1,1 @@
-"""智投终端 API package."""
+"""息壤投研 API package."""

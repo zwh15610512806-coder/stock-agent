@@ -30,6 +30,7 @@ export function MarketPage() {
   const isInitialLoading = dashboard.isPending && !data;
   const indexQuotes = data?.markets.flatMap((market) => market.indices) || [];
   const aShare = data?.markets.find((market) => market.market === "CN");
+  const aShareTurnover = data?.a_share_turnover;
   const heatmapData = [
     ...(data?.industry_heatmap || []),
     ...(data?.concept_heatmap || []),
@@ -84,7 +85,11 @@ export function MarketPage() {
       <section className="market-block">
         <SectionTitle icon={Activity} title="市场脉搏" subtitle="成交、涨跌家数、赚钱效应与资金流" />
         <div className="pulse-grid">
-          <PulseMetric label="两市成交额" value={isInitialLoading ? "加载中" : aShare ? formatMoney(aShare.turnover * 100000000) : "--"} detail="A股主要指数口径" />
+          <PulseMetric
+            label="两市成交额"
+            value={isInitialLoading ? "加载中" : aShareTurnover?.value ? formatTrillion(aShareTurnover.value) : "--"}
+            detail={aShareTurnover?.source || "交易所总貌口径"}
+          />
           <PulseMetric
             label="涨 / 跌"
             value={isInitialLoading ? "加载中" : formatBreadth(data?.a_share_activity)}
@@ -349,6 +354,13 @@ function MarketLoading({ title, compact = false }: { title: string; compact?: bo
       <span>正在连接免费行情源和本地 SQLite 缓存。</span>
     </div>
   );
+}
+
+function formatTrillion(value: number): string {
+  if (Math.abs(value) >= 1000000000000) {
+    return `${formatNumber(value / 1000000000000, 2)}万亿`;
+  }
+  return formatMoney(value);
 }
 
 function formatBreadth(activity?: AShareActivity | null): string {

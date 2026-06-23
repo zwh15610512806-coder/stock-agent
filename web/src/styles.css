@@ -2465,6 +2465,90 @@ body {
   background: #f8fafc;
 }
 
+.macro-page,
+.macro-metric-list,
+.portfolio-warning-list {
+  gap: 12px;
+}
+
+.macro-metric-panel .panel-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.macro-metric-list {
+  display: grid;
+}
+
+.macro-metric-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--xirang-line);
+}
+
+.macro-metric-row:last-child {
+  border-bottom: 0;
+}
+
+.macro-metric-row span,
+.macro-metric-row small {
+  color: var(--xirang-muted);
+}
+
+.macro-metric-row strong {
+  font-family: var(--mono);
+  color: var(--xirang-primary);
+}
+
+.macro-metric-row small {
+  grid-column: 1 / -1;
+  font-size: 12px;
+}
+
+.stocks-screener-table {
+  margin-top: 16px;
+}
+
+.stocks-screener-table td:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.stocks-screener-table td:first-child span {
+  color: var(--xirang-muted);
+  font-size: 12px;
+}
+
+.stocks-etf-row {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stocks-etf-row.active {
+  background: #f8fafc;
+}
+
+.stocks-etf-chart {
+  margin-top: 16px;
+}
+
+.portfolio-source-panel {
+  padding: 18px;
+}
+
+.portfolio-warning-list {
+  display: grid;
+}
+
+.portfolio-source-list {
+  margin-top: 10px;
+}
+
 .metric-value,
 .dashboard-metric-value,
 .index-price,

@@ -16,6 +16,7 @@ import httpx
 
 from app.schemas.market import (
     AShareActivity,
+    AShareTurnover,
     CandleSnapshot,
     CommodityQuote,
     DashboardCacheStatus,
@@ -53,6 +54,7 @@ EASTMONEY_SOURCE = "eastmoney-sector-fund-flow"
 NEWS_SOURCE = "cls-telegraph"
 COMMODITY_SOURCE = "akshare-commodity"
 LHB_SOURCE = "eastmoney-lhb"
+ASHARE_TURNOVER_SOURCE = "akshare-exchange-summary"
 SNAPSHOT_TTL_SECONDS = 10 * 60
 SLOW_SNAPSHOT_TTL_SECONDS = 30 * 60
 DASHBOARD_SOURCE_TIMEOUT_SECONDS = 5.0
@@ -191,6 +193,18 @@ class MarketDataService:
             timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
         ))
 
+        turnover_task = asyncio.create_task(self._cached_dashboard_source(
+            key="dashboard:a_share_turnover",
+            name="a_share_turnover",
+            source=ASHARE_TURNOVER_SOURCE,
+            ttl_seconds=SNAPSHOT_TTL_SECONDS,
+            fetcher=self._fetch_a_share_turnover_sync,
+            serializer=lambda item: item.model_dump(mode="json"),
+            deserializer=lambda payload: AShareTurnover.model_validate(payload),
+            empty_value=None,
+            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+        ))
+
         industry_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:industry_heatmap",
             name="industry_heatmap",
@@ -276,7 +290,10 @@ class MarketDataService:
         ))
 
         activity, activity_status = await activity_task
-        market_task = asyncio.create_task(self._dashboard_markets(normalized_markets, activity))
+        a_share_turnover, turnover_status = await turnover_task
+        if a_share_turnover is not None:
+            a_share_turnover.status = turnover_status.status
+        market_task = asyncio.create_task(self._dashboard_markets(normalized_markets, activity, a_share_turnover))
         market_items, market_status = await market_task
         sparkline_task = asyncio.create_task(self._dashboard_index_sparklines(market_items))
 
@@ -308,6 +325,7 @@ class MarketDataService:
                 primary_quote_status,
                 primary_candles_status,
                 activity_status,
+                turnover_status,
                 industry_status,
                 concept_status,
                 region_status,
@@ -328,6 +346,7 @@ class MarketDataService:
             primary_candles=primary_candles,
             markets=market_items,
             a_share_activity=activity,
+            a_share_turnover=a_share_turnover,
             fund_flow_summary=fund_flow_summary,
             industry_heatmap=industry_heatmap,
             concept_heatmap=concept_heatmap,
@@ -383,6 +402,7 @@ class MarketDataService:
         self,
         markets: list[MarketCode],
         activity: AShareActivity | None,
+        a_share_turnover: AShareTurnover | None,
     ) -> tuple[list[MarketOverviewItem], DashboardSourceStatus]:
         statuses: list[str] = []
 
@@ -403,11 +423,18 @@ class MarketDataService:
             declines = activity.declines if market == "CN" and activity else sum(1 for quote in live_quotes if quote.change_pct < 0)
             unchanged = activity.unchanged if market == "CN" and activity else max(0, len(live_quotes) - advances - declines)
             sentiment = activity.sentiment if market == "CN" and activity else _sentiment_from_quotes(live_quotes, advances, declines)
+            turnover = (
+                round(a_share_turnover.value / 100000000, 2)
+                if market == "CN" and a_share_turnover is not None and a_share_turnover.value > 0
+                else round(sum(item.turnover for item in live_quotes) / 100000000, 2)
+                if market != "CN"
+                else 0
+            )
             return MarketOverviewItem(
                 market=market,
                 label={"CN": "A股", "HK": "港股", "US": "美股"}[market],
                 indices=live_quotes,
-                turnover=round(sum(item.turnover for item in live_quotes) / 100000000, 2),
+                turnover=turnover,
                 sentiment=sentiment,
                 breadth=MarketBreadth(
                     advances=advances,
@@ -494,6 +521,27 @@ class MarketDataService:
             suspended=int(parse_cn_money(values.get("停牌"))),
             sentiment=max(0, min(100, parse_pct(values.get("活跃度")))),
             source=LEGU_SOURCE,
+            as_of=as_of,
+        )
+
+    def _fetch_a_share_turnover_sync(self) -> AShareTurnover:
+        with _without_proxy_env():
+            akshare = self._akshare()
+            sse_rows = _records(akshare.stock_sse_summary())
+            szse_rows = _records(akshare.stock_szse_summary())
+        sse_value = _exchange_turnover_from_rows(sse_rows)
+        szse_value = _exchange_turnover_from_rows(szse_rows)
+        total = sse_value + szse_value
+        if total <= 0:
+            raise RuntimeError("exchange summaries returned no A-share turnover")
+        as_of = _latest_datetime_from_rows([*sse_rows, *szse_rows])
+        return AShareTurnover(
+            value=round(total, 4),
+            unit="CNY",
+            sse_value=round(sse_value, 4),
+            szse_value=round(szse_value, 4),
+            source=ASHARE_TURNOVER_SOURCE,
+            status="live",
             as_of=as_of,
         )
 
@@ -1358,6 +1406,102 @@ def _row_value(row: Mapping[str, object], names: tuple[str, ...]) -> object:
         if name in row:
             return row[name]
     return None
+
+
+def _exchange_turnover_from_rows(rows: list[Mapping[str, object]]) -> float:
+    total_candidates: list[float] = []
+    a_share_candidates: list[float] = []
+    turnover_row_candidates: list[float] = []
+    for row in rows:
+        label = _clean_text(_row_value(row, ("item", "项目", "指标", "name", "证券类别", "类别", "category")))
+        turnover_value = _row_value(row, ("turnover", "amount", "成交金额", "成交额"))
+        if turnover_value is not None:
+            amount = _exchange_money_to_yuan(turnover_value, row)
+            if amount > 0 and _is_total_stock_label(label):
+                total_candidates.append(amount)
+            elif amount > 0 and _is_a_share_label(label):
+                a_share_candidates.append(amount)
+
+        if _is_turnover_label(label):
+            value = _row_value(row, ("stock", "股票", "A股", "a_share", "a shares", "合计", "value"))
+            if value is None:
+                value = _first_numeric_row_value(row)
+            amount = _exchange_money_to_yuan(value, row)
+            if amount > 0:
+                turnover_row_candidates.append(amount)
+
+    if total_candidates:
+        return max(total_candidates)
+    if a_share_candidates:
+        return sum(a_share_candidates)
+    if turnover_row_candidates:
+        return max(turnover_row_candidates)
+    return 0
+
+
+def _exchange_money_to_yuan(value: object, row: Mapping[str, object]) -> float:
+    if value is None:
+        return 0
+    text = str(value).strip()
+    normalized = (
+        text.replace(",", "")
+        .replace("亿元", "亿")
+        .replace("万元", "万")
+        .replace("人民币", "")
+        .replace("CNY", "")
+        .replace("RMB", "")
+        .replace("元", "")
+        .strip()
+    )
+    amount = parse_cn_money(normalized)
+    if amount == 0:
+        return 0
+    value_has_unit = any(token in text for token in ("亿", "万", "元", "CNY", "RMB", "人民币"))
+    unit_text = " ".join(str(item) for key, item in row.items() if str(key).lower() in {"unit", "单位"})
+    if not value_has_unit:
+        unit_lower = unit_text.lower()
+        if "100m" in unit_lower or "亿" in unit_text:
+            amount *= 100000000
+        elif "万" in unit_text:
+            amount *= 10000
+        elif 0 < abs(amount) < 10000000:
+            amount *= 100000000
+    return round(amount, 4)
+
+
+def _first_numeric_row_value(row: Mapping[str, object]) -> object:
+    skip_keys = {"item", "项目", "指标", "name", "证券类别", "类别", "category", "unit", "单位", "date", "日期"}
+    for key, value in row.items():
+        if str(key) in skip_keys:
+            continue
+        if parse_cn_money(value) != 0:
+            return value
+    return None
+
+
+def _is_turnover_label(value: str) -> bool:
+    text = value.lower()
+    return "turnover" in text or "成交金额" in value or "成交额" in value
+
+
+def _is_total_stock_label(value: str) -> bool:
+    text = value.lower()
+    return value in {"股票", "A股", "合计"} or "stock" in text or "a股" in text or "a share" in text
+
+
+def _is_a_share_label(value: str) -> bool:
+    text = value.lower()
+    return "a股" in text or "a share" in text or "主板a" in text or "创业板" in value or "科创板" in value
+
+
+def _latest_datetime_from_rows(rows: list[Mapping[str, object]]) -> datetime | None:
+    values: list[datetime] = []
+    for row in rows:
+        for key in ("date", "日期", "交易日期", "统计日期", "as_of", "time", "更新时间"):
+            parsed = _parse_optional_datetime(_row_value(row, (key,)))
+            if parsed is not None:
+                values.append(parsed)
+    return max(values) if values else None
 
 
 def _safe_float(value: object) -> float:

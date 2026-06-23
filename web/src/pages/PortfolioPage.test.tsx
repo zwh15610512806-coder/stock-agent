@@ -22,6 +22,8 @@ const emptyAnalysis: PortfolioAnalysis = {
   weights: [],
   risks: [],
   suggestions: [],
+  quote_status: [],
+  data_warnings: [],
   disclaimer: "仅供研究参考",
 };
 
@@ -88,5 +90,30 @@ describe("PortfolioPage OCR upload", () => {
     await waitFor(() => {
       expect(usePortfolioStore.getState().positions).toEqual([parsedPosition]);
     });
+  });
+
+  it("shows quote source warnings returned by portfolio analysis", async () => {
+    vi.mocked(api.analyzePortfolio).mockResolvedValue({
+      ...emptyAnalysis,
+      total_value: 12000,
+      positions: [{ ...parsedPosition, market_value: 12000, cost_value: 10000, pnl: 2000, pnl_pct: 0.2 }],
+      weights: [{ symbol: "600519.SH", name: "贵州茅台", market: "CN", value: 12000, weight: 1 }],
+      quote_status: [
+        {
+          symbol: "600519.SH",
+          status: "unavailable",
+          source: "sample fallback",
+          detail: "sample fallback rejected; kept local current_price",
+          as_of: null,
+        },
+      ],
+      data_warnings: ["600519.SH 行情不可用，已保留本地现价。"],
+    });
+    usePortfolioStore.setState({ positions: [parsedPosition] });
+
+    renderPortfolioPage();
+
+    expect(await screen.findByText("600519.SH 行情不可用，已保留本地现价。")).toBeTruthy();
+    expect(screen.getByText(/sample fallback rejected/)).toBeTruthy();
   });
 });

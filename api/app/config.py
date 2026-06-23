@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "智投终端 API"
+    app_name: str = "息壤投研 API"
     environment: str = "local"
     deepseek_api_key: str = ""
     deepseek_api_base: str = "https://api.deepseek.com"

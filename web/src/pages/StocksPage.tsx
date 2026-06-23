@@ -6,7 +6,7 @@ import { EmptyState } from "../components/EmptyState";
 import { MetricCard } from "../components/MetricCard";
 import { api } from "../lib/api";
 import { formatCompact, formatNumber, toneForPct } from "../lib/format";
-import type { MarketCode } from "../lib/types";
+import type { MarketCode, StockScreenerItem, StockScreenerResponse, SymbolSearchResult } from "../lib/types";
 
 type StocksTab = "workbench" | "selector" | "etf";
 
@@ -141,9 +141,12 @@ function SelectorPanel() {
   const [activeQuery, setActiveQuery] = useState("茅台");
   const [market, setMarket] = useState<MarketCode>("CN");
 
-  const results = useQuery({
-    queryKey: ["stocks-center-symbol-search", activeQuery],
-    queryFn: () => api.searchSymbols(activeQuery, ["CN", "HK", "US"]),
+  const screener = useQuery<StockScreenerResponse | SymbolSearchResult[]>({
+    queryKey: ["stocks-center-screener", market, activeQuery],
+    queryFn: () =>
+      market === "CN"
+        ? api.stockScreener({ query: activeQuery, limit: 30 })
+        : api.searchSymbols(activeQuery, [market]),
     enabled: activeQuery.length > 0,
   });
 
@@ -157,7 +160,7 @@ function SelectorPanel() {
       <div className="panel-head">
         <div>
           <h3>选股器</h3>
-          <span>先用代码和公司名称检索，后续接入财务、估值和技术指标筛选。</span>
+          <span>{market === "CN" ? "A 股真实股票池与估值/成交指标筛选。" : "港美股暂保留基础代码检索。"}</span>
         </div>
       </div>
       <form className="terminal-search" onSubmit={submit}>
@@ -177,41 +180,134 @@ function SelectorPanel() {
           搜索
         </button>
       </form>
-      <div className="quote-list stocks-selector-results">
-        {results.data?.map((item) => (
-          <div className="quote-row" key={item.symbol}>
-            <div>
-              <strong>{item.name}</strong>
-              <span>{item.symbol}</span>
+      {market === "CN" ? (
+        <ScreenerTable
+          items={(screener.data as { items?: StockScreenerItem[] } | undefined)?.items || []}
+          source={(screener.data as { source?: string } | undefined)?.source}
+        />
+      ) : (
+        <div className="quote-list stocks-selector-results">
+          {(screener.data as Array<{ symbol: string; name: string; market: string; currency: string }> | undefined)?.map((item) => (
+            <div className="quote-row" key={item.symbol}>
+              <div>
+                <strong>{item.name}</strong>
+                <span>{item.symbol}</span>
+              </div>
+              <div className="quote-price">
+                <strong>{item.market}</strong>
+                <span>{item.currency}</span>
+              </div>
             </div>
-            <div className="quote-price">
-              <strong>{item.market}</strong>
-              <span>{item.currency}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      {!results.isPending && !results.data?.length ? (
+          ))}
+        </div>
+      )}
+      {!screener.isPending &&
+      (market === "CN"
+        ? !((screener.data as { items?: StockScreenerItem[] } | undefined)?.items || []).length
+        : !(screener.data as unknown[] | undefined)?.length) ? (
         <EmptyState title="暂无匹配股票" body="调整关键词后重新搜索，页面不会展示模拟证券。" />
       ) : null}
     </section>
   );
 }
 
+function ScreenerTable({ items, source }: { items: StockScreenerItem[]; source?: string }) {
+  return (
+    <div className="table-wrap portfolio-table-wrap stocks-screener-table">
+      <table className="portfolio-table">
+        <thead>
+          <tr>
+            <th>股票</th>
+            <th>价格</th>
+            <th>涨跌幅</th>
+            <th>成交额</th>
+            <th>PE</th>
+            <th>PB</th>
+            <th>来源</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.symbol}>
+              <td>
+                <strong>{item.name}</strong>
+                <span>{item.symbol}</span>
+              </td>
+              <td>{formatNumber(item.price, 2)}</td>
+              <td className={`tone-text ${toneForPct(item.change_pct)}`}>{formatNumber(item.change_pct, 2)}%</td>
+              <td>{formatCompact(item.turnover)}</td>
+              <td>{item.pe === null || item.pe === undefined ? "--" : formatNumber(item.pe, 2)}</td>
+              <td>{item.pb === null || item.pb === undefined ? "--" : formatNumber(item.pb, 2)}</td>
+              <td>{item.source || source || "--"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function EtfPanel() {
+  const [query, setQuery] = useState("沪深300");
+  const [activeQuery, setActiveQuery] = useState("沪深300");
+  const [selectedSymbol, setSelectedSymbol] = useState("");
+  const etfs = useQuery({
+    queryKey: ["stocks-center-etfs", activeQuery],
+    queryFn: () => api.searchEtfs(activeQuery, 20),
+  });
+  const symbol = selectedSymbol || etfs.data?.items[0]?.symbol || "";
+  const candles = useQuery({
+    queryKey: ["stocks-center-etf-candles", symbol],
+    queryFn: () => api.etfCandles(symbol, "daily", 120),
+    enabled: symbol.length > 0,
+  });
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    setSelectedSymbol("");
+    setActiveQuery(query.trim());
+  }
+
   return (
     <section className="data-panel stocks-etf-panel">
       <div className="panel-head">
         <div>
           <h3>ETF 资产包</h3>
-          <span>净值、持仓、折溢价与行业权重</span>
+          <span>{etfs.data?.source || "akshare-etf"}</span>
         </div>
         <BarChart3 size={18} />
       </div>
-      <EmptyState
-        title="ETF 真实数据暂不可用"
-        body="接入 ETF 净值、持仓和折溢价数据源后，这里会展示资产包视角；当前不展示样例或模拟数据。"
-      />
+      <form className="terminal-search" onSubmit={submit}>
+        <input aria-label="搜索 ETF" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="沪深300 / 510300" />
+        <button className="terminal-button" type="submit">
+          <Search size={16} />
+          搜索
+        </button>
+      </form>
+      <div className="quote-list stocks-selector-results">
+        {etfs.data?.items.map((item) => (
+          <button
+            className={`quote-row stocks-etf-row${symbol === item.symbol ? " active" : ""}`}
+            key={item.symbol}
+            onClick={() => setSelectedSymbol(item.symbol)}
+            type="button"
+          >
+            <div>
+              <strong>{item.name}</strong>
+              <span>{item.symbol}</span>
+            </div>
+            <div className="quote-price">
+              <strong>{formatNumber(item.price, 2)}</strong>
+              <span className={`tone-text ${toneForPct(item.change_pct)}`}>{formatNumber(item.change_pct, 2)}%</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      {etfs.isError ? <EmptyState title="ETF 数据源不可用" body="免费 ETF 源暂时无法返回真实数据。" /> : null}
+      {!etfs.isPending && !etfs.data?.items.length ? <EmptyState title="暂无匹配 ETF" body="调整关键词后重新搜索。" /> : null}
+      <div className="stocks-etf-chart">
+        {candles.data?.length ? <CandleChart candles={candles.data} /> : <div className="chart-skeleton" />}
+      </div>
     </section>
   );
 }

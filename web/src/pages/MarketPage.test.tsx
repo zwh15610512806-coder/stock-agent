@@ -92,6 +92,12 @@ const dashboard: MarketDashboardResponse = {
     source: "legulegu-market-activity",
     as_of: "2026-06-23T15:00:00Z",
   },
+  a_share_turnover: {
+    value: 1024300000000,
+    source: "sse-szse-summary",
+    status: "live",
+    as_of: "2026-06-23T15:00:00Z",
+  },
   fund_flow_summary: {
     top_inflows: [{ symbol: "600519", name: "贵州茅台", change_pct: 1.2, net_amount: 346000000, turnover: 4020000000, source: "ths-fund-flow" }],
     top_outflows: [{ symbol: "300750", name: "宁德时代", change_pct: -0.5, net_amount: -20464500, turnover: 3200000000, source: "ths-fund-flow" }],
@@ -177,6 +183,7 @@ describe("MarketPage dashboard", () => {
     expect(await screen.findByText("市场全景")).toBeTruthy();
     expect(screen.getByText("全球指数")).toBeTruthy();
     expect(screen.getByText("市场脉搏")).toBeTruthy();
+    expect(await screen.findByText("1.02万亿")).toBeTruthy();
     expect(screen.getByText("7x24快讯")).toBeTruthy();
     expect(screen.getByText("板块热力图")).toBeTruthy();
     expect(screen.getByText("大宗商品")).toBeTruthy();

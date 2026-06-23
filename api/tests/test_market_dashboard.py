@@ -32,6 +32,12 @@ class DashboardAkShare:
             ]
         )
 
+    def stock_sse_summary(self) -> FakeTable:
+        return FakeTable([{"item": "turnover", "stock": 5000.25, "unit": "100m CNY", "date": "2026-06-23"}])
+
+    def stock_szse_summary(self) -> FakeTable:
+        return FakeTable([{"item": "turnover", "stock": 7300.75, "unit": "100m CNY", "date": "2026-06-23"}])
+
     def stock_fund_flow_industry(self, symbol: str = "即时") -> FakeTable:
         assert symbol == "即时"
         return FakeTable(
@@ -361,6 +367,10 @@ async def test_dashboard_uses_real_sources_and_reports_cache_status(tmp_path) ->
     assert dashboard.a_share_activity is not None
     assert dashboard.a_share_activity.advances == 2600
     assert dashboard.a_share_activity.sentiment == 57.7
+    assert dashboard.a_share_turnover is not None
+    assert dashboard.a_share_turnover.value == 1230100000000
+    assert dashboard.a_share_turnover.unit == "CNY"
+    assert dashboard.markets[0].turnover == 12301.0
     assert dashboard.industry_heatmap[0].name == "银行"
     assert dashboard.industry_heatmap[0].net_amount == 2250000000
     assert dashboard.concept_heatmap[0].name == "人工智能"
@@ -468,6 +478,7 @@ async def test_dashboard_reports_unavailable_without_fake_data(tmp_path) -> None
     assert dashboard.commodity_quotes == []
     assert dashboard.dragon_tiger == []
     assert any(status.status == "unavailable" for status in dashboard.source_status)
+    assert dashboard.a_share_turnover is None
 
 
 def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
@@ -488,6 +499,8 @@ def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
     assert body["primary_quote"]["symbol"] == "000001.SH"
     assert body["primary_candles"]
     assert body["a_share_activity"]["advances"] == 2600
+    assert body["a_share_turnover"]["value"] == 1230100000000
+    assert body["markets"][0]["turnover"] == 12301.0
     assert body["industry_heatmap"][0]["name"] == "银行"
     assert body["market_news"][0]["title"] == "央行开展公开市场操作"
     assert body["commodity_quotes"][0]["name"] == "黄金连续"

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -36,6 +37,14 @@ class PortfolioRisk(BaseModel):
     detail: str
 
 
+class PortfolioQuoteStatus(BaseModel):
+    symbol: str
+    status: Literal["live", "stale", "unavailable"]
+    source: str
+    detail: str = ""
+    as_of: datetime | None = None
+
+
 class PortfolioAnalysisRequest(BaseModel):
     positions: list[PortfolioPosition]
     refresh_prices: bool = True
@@ -51,3 +60,5 @@ class PortfolioAnalysis(BaseModel):
     risks: list[PortfolioRisk]
     suggestions: list[str]
     disclaimer: str
+    quote_status: list[PortfolioQuoteStatus] = Field(default_factory=list)
+    data_warnings: list[str] = Field(default_factory=list)

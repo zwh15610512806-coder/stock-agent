@@ -2,12 +2,15 @@ import type {
   AiReportResponse,
   AiReportAnalysisSkill,
   CandleSnapshot,
+  EtfSearchResponse,
+  MacroDashboardResponse,
   MarketDashboardResponse,
   MarketCode,
   MarketOverviewResponse,
   PortfolioAnalysis,
   PortfolioPosition,
   QuoteSnapshot,
+  StockScreenerResponse,
   SymbolSearchResult,
 } from "./types";
 
@@ -32,6 +35,7 @@ export const api = {
     requestJson<MarketOverviewResponse>(`/api/market/overview?markets=${markets.join(",")}`),
   marketDashboard: (markets: MarketCode[] = ["CN", "HK", "US"], period = "daily") =>
     requestJson<MarketDashboardResponse>(`/api/market/dashboard?markets=${markets.join(",")}&period=${period}`),
+  macroDashboard: () => requestJson<MacroDashboardResponse>("/api/macro/dashboard"),
   quotes: (symbols: string[]) =>
     requestJson<QuoteSnapshot[]>(`/api/market/quotes?symbols=${encodeURIComponent(symbols.join(","))}`),
   candles: (symbol: string, period = "daily", limit = 120) =>
@@ -41,6 +45,30 @@ export const api = {
   searchSymbols: (q: string, markets: MarketCode[] = ["CN", "HK", "US"]) =>
     requestJson<SymbolSearchResult[]>(
       `/api/symbols/search?q=${encodeURIComponent(q)}&markets=${markets.join(",")}`,
+    ),
+  stockScreener: (params: {
+    query?: string;
+    min_change_pct?: number;
+    max_change_pct?: number;
+    min_turnover?: number;
+    min_market_cap?: number;
+    max_pe?: number;
+    max_pb?: number;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, String(value));
+      }
+    });
+    return requestJson<StockScreenerResponse>(`/api/stocks/screener?${query.toString()}`);
+  },
+  searchEtfs: (q = "", limit = 20) =>
+    requestJson<EtfSearchResponse>(`/api/etfs/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  etfCandles: (symbol: string, period = "daily", limit = 120) =>
+    requestJson<CandleSnapshot[]>(
+      `/api/etfs/candles?symbol=${encodeURIComponent(symbol)}&period=${period}&limit=${limit}`,
     ),
   analyzePortfolio: (positions: PortfolioPosition[]) =>
     requestJson<PortfolioAnalysis>("/api/portfolio/analyze", {

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Protocol
 
 from app.schemas.market import QuoteSnapshot
@@ -5,6 +6,7 @@ from app.schemas.portfolio import (
     PortfolioAnalysis,
     PortfolioPosition,
     PortfolioPositionAnalysis,
+    PortfolioQuoteStatus,
     PortfolioRisk,
     PortfolioWeight,
 )
@@ -18,22 +20,91 @@ class QuoteProvider(Protocol):
         pass
 
 
-async def refresh_positions_with_quotes(
+@dataclass(frozen=True)
+class PortfolioRefreshResult:
+    positions: list[PortfolioPosition]
+    quote_status: list[PortfolioQuoteStatus]
+    data_warnings: list[str]
+
+
+async def refresh_portfolio_prices(
     positions: list[PortfolioPosition],
     quote_provider: QuoteProvider,
-) -> list[PortfolioPosition]:
+) -> PortfolioRefreshResult:
     if not positions:
-        return positions
+        return PortfolioRefreshResult(positions=[], quote_status=[], data_warnings=[])
     try:
         quotes = await quote_provider.quotes([position.symbol for position in positions])
-    except Exception:
-        return positions
-    quote_by_symbol = {quote.symbol: quote for quote in quotes}
+    except Exception as exc:
+        detail = f"quote refresh failed: {_error_detail(exc)}"
+        return PortfolioRefreshResult(
+            positions=positions,
+            quote_status=[
+                PortfolioQuoteStatus(
+                    symbol=normalize_symbol(position.symbol, position.market),
+                    status="unavailable",
+                    source="market-quote",
+                    detail=detail,
+                )
+                for position in positions
+            ],
+            data_warnings=[
+                f"{normalize_symbol(position.symbol, position.market)}: {detail}; kept local current_price"
+                for position in positions
+            ],
+        )
+
+    quote_by_symbol: dict[str, QuoteSnapshot] = {}
+    for quote in quotes:
+        quote_by_symbol[quote.symbol] = quote
+        quote_by_symbol[normalize_symbol(quote.symbol, quote.market)] = quote
+
     refreshed: list[PortfolioPosition] = []
+    quote_status: list[PortfolioQuoteStatus] = []
+    data_warnings: list[str] = []
     for position in positions:
-        quote = quote_by_symbol.get(normalize_symbol(position.symbol, position.market))
-        if quote is None or quote.price <= 0:
+        normalized_symbol = normalize_symbol(position.symbol, position.market)
+        quote = quote_by_symbol.get(normalized_symbol) or quote_by_symbol.get(position.symbol)
+        if quote is None:
+            detail = "quote unavailable; kept local current_price"
             refreshed.append(position)
+            quote_status.append(
+                PortfolioQuoteStatus(
+                    symbol=normalized_symbol,
+                    status="unavailable",
+                    source="market-quote",
+                    detail=detail,
+                )
+            )
+            data_warnings.append(f"{normalized_symbol}: {detail}")
+            continue
+        if _is_sample_fallback(quote):
+            detail = "sample fallback quote rejected; kept local current_price"
+            refreshed.append(position)
+            quote_status.append(
+                PortfolioQuoteStatus(
+                    symbol=quote.symbol,
+                    status="unavailable",
+                    source=quote.source,
+                    detail=detail,
+                    as_of=quote.as_of,
+                )
+            )
+            data_warnings.append(f"{normalized_symbol}: {detail}")
+            continue
+        if quote.price <= 0:
+            detail = "invalid quote price; kept local current_price"
+            refreshed.append(position)
+            quote_status.append(
+                PortfolioQuoteStatus(
+                    symbol=quote.symbol,
+                    status="unavailable",
+                    source=quote.source,
+                    detail=detail,
+                    as_of=quote.as_of,
+                )
+            )
+            data_warnings.append(f"{normalized_symbol}: {detail}")
             continue
         refreshed.append(
             position.model_copy(
@@ -46,10 +117,31 @@ async def refresh_positions_with_quotes(
                 }
             )
         )
-    return refreshed
+        quote_status.append(
+            PortfolioQuoteStatus(
+                symbol=quote.symbol,
+                status="live",
+                source=quote.source,
+                detail=quote.delay_label,
+                as_of=quote.as_of,
+            )
+        )
+    return PortfolioRefreshResult(positions=refreshed, quote_status=quote_status, data_warnings=data_warnings)
 
 
-def analyze_portfolio(positions: list[PortfolioPosition]) -> PortfolioAnalysis:
+async def refresh_positions_with_quotes(
+    positions: list[PortfolioPosition],
+    quote_provider: QuoteProvider,
+) -> list[PortfolioPosition]:
+    result = await refresh_portfolio_prices(positions, quote_provider)
+    return result.positions
+
+
+def analyze_portfolio(
+    positions: list[PortfolioPosition],
+    quote_status: list[PortfolioQuoteStatus] | None = None,
+    data_warnings: list[str] | None = None,
+) -> PortfolioAnalysis:
     analyzed: list[PortfolioPositionAnalysis] = []
     for position in positions:
         market_value = round(position.quantity * position.current_price, 4)
@@ -93,7 +185,17 @@ def analyze_portfolio(positions: list[PortfolioPosition]) -> PortfolioAnalysis:
         risks=risks,
         suggestions=suggestions,
         disclaimer=DISCLAIMER,
+        quote_status=quote_status or [],
+        data_warnings=data_warnings or [],
     )
+
+
+def _is_sample_fallback(quote: QuoteSnapshot) -> bool:
+    return quote.source.strip().lower() == "sample fallback"
+
+
+def _error_detail(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__
 
 
 def _portfolio_risks(weights: list[PortfolioWeight], pnl_pct: float) -> list[PortfolioRisk]:

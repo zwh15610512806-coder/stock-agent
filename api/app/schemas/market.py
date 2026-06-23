@@ -40,6 +40,9 @@ class SymbolSearchResult(BaseModel):
     name: str
     market: MarketCode
     currency: str
+    type: str | None = None
+    source: str | None = None
+    exchange: str | None = None
 
 
 class MarketHeatItem(BaseModel):
@@ -92,6 +95,16 @@ class AShareActivity(BaseModel):
     suspended: int = 0
     sentiment: float = Field(default=0, ge=0, le=100)
     source: str
+    as_of: datetime | None = None
+
+
+class AShareTurnover(BaseModel):
+    value: float = 0
+    unit: str = "CNY"
+    sse_value: float = 0
+    szse_value: float = 0
+    source: str
+    status: DashboardSourceState = "live"
     as_of: datetime | None = None
 
 
@@ -162,6 +175,7 @@ class MarketDashboardResponse(BaseModel):
     primary_candles: list[CandleSnapshot] = []
     markets: list[MarketOverviewItem]
     a_share_activity: AShareActivity | None = None
+    a_share_turnover: AShareTurnover | None = None
     fund_flow_summary: FundFlowSummary | None = None
     industry_heatmap: list[DashboardHeatItem] = []
     concept_heatmap: list[DashboardHeatItem] = []

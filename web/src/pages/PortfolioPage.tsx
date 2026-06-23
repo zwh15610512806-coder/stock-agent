@@ -109,6 +109,38 @@ export function PortfolioPage() {
         <MetricCard label="最大权重" value={topWeight ? `${formatNumber(topWeight.weight * 100)}%` : "--"} detail={topWeight?.name || "--"} />
       </div>
 
+      {(analysis.data?.data_warnings?.length || analysis.data?.quote_status?.length) ? (
+        <section className="data-panel portfolio-source-panel">
+          <div className="panel-head portfolio-panel-head">
+            <div>
+              <h3>行情刷新状态</h3>
+              <span>真实源失败时保留本地现价，不使用演示兜底数据。</span>
+            </div>
+          </div>
+          <div className="portfolio-warning-list">
+            {analysis.data?.data_warnings?.map((warning) => (
+              <p className="notice-text portfolio-notice" key={warning}>
+                {warning}
+              </p>
+            ))}
+          </div>
+          <div className="quote-list portfolio-source-list">
+            {analysis.data?.quote_status?.map((status) => (
+              <div className="quote-row" key={`${status.symbol}-${status.source}`}>
+                <div>
+                  <strong>{status.symbol}</strong>
+                  <span>{status.detail || status.source}</span>
+                </div>
+                <div className="quote-price">
+                  <strong>{status.status}</strong>
+                  <span>{status.as_of ? new Date(status.as_of).toLocaleString("zh-CN", { hour12: false }) : status.source}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <div className="two-column portfolio-tool-grid">
         <section className="data-panel portfolio-entry-panel">
           <div className="panel-head portfolio-panel-head">

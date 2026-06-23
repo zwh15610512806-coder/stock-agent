@@ -148,6 +148,12 @@ export interface MarketDashboardResponse {
   primary_quote: QuoteSnapshot | null;
   primary_candles: CandleSnapshot[];
   markets: MarketOverviewItem[];
+  a_share_turnover?: {
+    value: number;
+    source: string;
+    status: DashboardSourceState;
+    as_of: string | null;
+  } | null;
   a_share_activity: AShareActivity | null;
   fund_flow_summary: FundFlowSummary | null;
   industry_heatmap: DashboardHeatItem[];
@@ -165,6 +171,69 @@ export interface SymbolSearchResult {
   name: string;
   market: MarketCode;
   currency: string;
+  type?: string;
+  source?: string;
+  exchange?: string;
+}
+
+export interface SourceMetric {
+  name: string;
+  value: number | null;
+  unit: string;
+  as_of: string | null;
+  source: string;
+  status: DashboardSourceState;
+}
+
+export interface MacroDashboardResponse {
+  as_of: string;
+  cache_status: DashboardCacheStatus;
+  source_status: DashboardSourceStatus[];
+  rates: SourceMetric[];
+  indicators: SourceMetric[];
+  bond_yields: SourceMetric[];
+  fx_rates: SourceMetric[];
+  disclaimer: string;
+}
+
+export interface StockScreenerItem {
+  symbol: string;
+  name: string;
+  price: number;
+  change_pct: number;
+  turnover: number;
+  volume?: number;
+  pe?: number | null;
+  pb?: number | null;
+  market_cap?: number | null;
+  source: string;
+}
+
+export interface StockScreenerResponse {
+  as_of: string | null;
+  source: string;
+  status: DashboardSourceState;
+  items: StockScreenerItem[];
+  detail?: string;
+}
+
+export interface EtfSnapshot {
+  symbol: string;
+  name: string;
+  price: number;
+  change_pct: number;
+  volume: number;
+  turnover: number;
+  source: string;
+  as_of?: string | null;
+}
+
+export interface EtfSearchResponse {
+  as_of: string | null;
+  source: string;
+  status: DashboardSourceState;
+  items: EtfSnapshot[];
+  detail?: string;
 }
 
 export interface PortfolioPosition {
@@ -201,6 +270,14 @@ export interface PortfolioAnalysis {
     detail: string;
   }>;
   suggestions: string[];
+  quote_status?: Array<{
+    symbol: string;
+    status: DashboardSourceState;
+    source: string;
+    detail: string;
+    as_of: string | null;
+  }>;
+  data_warnings?: string[];
   disclaimer: string;
 }
 
