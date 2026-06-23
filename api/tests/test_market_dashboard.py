@@ -1,3 +1,4 @@
+import time
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -65,6 +66,81 @@ class DashboardAkShare:
             [
                 {"名称": "上海", "涨跌幅": "0.92%", "主力净流入": "12.2亿", "成交额": "333.3亿"},
                 {"名称": "湖北", "涨跌幅": "-0.58%", "主力净流入": "-4.8亿", "成交额": "121.0亿"},
+            ]
+        )
+
+    def stock_info_global_cls(self, symbol: str = "全部") -> FakeTable:
+        assert symbol == "全部"
+        return FakeTable(
+            [
+                {"标题": "央行开展公开市场操作", "内容": "维护银行体系流动性合理充裕", "发布日期": "2026-06-23", "发布时间": "14:57"},
+                {"标题": "半导体板块午后走强", "内容": "多只成分股涨幅居前", "发布日期": "2026-06-23", "发布时间": "14:38"},
+            ]
+        )
+
+    def spot_quotations_sge(self, symbol: str = "Au99.99") -> FakeTable:
+        if symbol == "Au99.99":
+            return FakeTable(
+                [
+                    {"品种": "Au99.99", "时间": "14:55", "现价": 917.84, "更新时间": "2026-06-23 14:56:00"},
+                    {"品种": "Au99.99", "时间": "14:56", "现价": 918.21, "更新时间": "2026-06-23 14:57:00"},
+                ]
+            )
+        if symbol == "Ag(T+D)":
+            return FakeTable(
+                [
+                    {"品种": "Ag(T+D)", "时间": "14:55", "现价": 16094.0, "更新时间": "2026-06-23 14:56:00"},
+                    {"品种": "Ag(T+D)", "时间": "14:56", "现价": 16099.0, "更新时间": "2026-06-23 14:57:00"},
+                ]
+            )
+        raise AssertionError(symbol)
+
+    def futures_global_spot_em(self) -> FakeTable:
+        return FakeTable(
+            [
+                {"代码": "GC00Y", "名称": "COMEX黄金", "最新价": 3377.2, "涨跌额": 12.3, "涨跌幅": 0.36, "成交量": 1200},
+                {"代码": "CL00Y", "名称": "NYMEX原油", "最新价": 81.4, "涨跌额": -0.7, "涨跌幅": -0.85, "成交量": 980},
+            ]
+        )
+
+    def stock_lhb_detail_em(self, start_date: str, end_date: str) -> FakeTable:
+        assert len(start_date) == 8
+        assert len(end_date) == 8
+        return FakeTable(
+            [
+                {
+                    "代码": "002765",
+                    "名称": "蓝黛科技",
+                    "上榜日": "2026-06-23",
+                    "收盘价": 110.43,
+                    "涨跌幅": 30.0,
+                    "龙虎榜净买额": 220000000,
+                    "龙虎榜买入额": 350000000,
+                    "龙虎榜卖出额": 130000000,
+                    "上榜原因": "日涨幅偏离值达7%",
+                },
+                {
+                    "代码": "300770",
+                    "名称": "新媒股份",
+                    "上榜日": "2026-06-23",
+                    "收盘价": 26.1,
+                    "涨跌幅": 30.0,
+                    "龙虎榜净买额": 120000000,
+                    "龙虎榜买入额": 200000000,
+                    "龙虎榜卖出额": 80000000,
+                    "上榜原因": "日换手率达20%",
+                },
+                {
+                    "代码": "600000",
+                    "名称": "旧日期股票",
+                    "上榜日": "2026-06-20",
+                    "收盘价": 10.1,
+                    "涨跌幅": 5.0,
+                    "龙虎榜净买额": 999999999,
+                    "龙虎榜买入额": 1000000000,
+                    "龙虎榜卖出额": 1,
+                    "上榜原因": "旧交易日",
+                },
             ]
         )
 
@@ -137,6 +213,138 @@ def test_market_snapshot_cache_returns_live_and_stale_payload(tmp_path) -> None:
     assert stale.payload["items"][0]["name"] == "电子"
 
 
+async def test_cached_dashboard_source_times_out_and_uses_stale_cache(tmp_path) -> None:
+    cache = MarketSnapshotCache(tmp_path / "market_cache.sqlite3")
+    cache.save(
+        "dashboard:slow_source",
+        {"items": [{"name": "缓存板块"}]},
+        "cached-source",
+        ttl_seconds=1,
+        fetched_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+    service = DashboardMarketService(
+        cache_ttl_seconds=90,
+        akshare_module=DashboardAkShare(),
+        snapshot_cache=cache,
+    )
+
+    def slow_fetcher() -> list[dict[str, str]]:
+        time.sleep(0.2)
+        return [{"name": "慢源板块"}]
+
+    result, status = await service._cached_dashboard_source(
+        key="dashboard:slow_source",
+        name="slow_source",
+        source="slow-test-source",
+        ttl_seconds=1,
+        fetcher=slow_fetcher,
+        serializer=lambda items: {"items": items},
+        deserializer=lambda payload: payload["items"],
+        empty_value=[],
+        timeout_seconds=0.01,
+    )
+
+    assert result == [{"name": "缓存板块"}]
+    assert status.status == "stale"
+    assert "timed out" in status.detail
+
+
+async def test_cached_dashboard_source_uses_fresh_cache_without_fetching(tmp_path) -> None:
+    cache = MarketSnapshotCache(tmp_path / "market_cache.sqlite3")
+    cache.save(
+        "dashboard:fresh_source",
+        {"items": [{"name": "新鲜缓存"}]},
+        "cached-source",
+        ttl_seconds=60,
+    )
+    service = DashboardMarketService(
+        cache_ttl_seconds=90,
+        akshare_module=DashboardAkShare(),
+        snapshot_cache=cache,
+    )
+    called = False
+
+    def fetcher() -> list[dict[str, str]]:
+        nonlocal called
+        called = True
+        raise RuntimeError("fresh cache should be used")
+
+    result, status = await service._cached_dashboard_source(
+        key="dashboard:fresh_source",
+        name="fresh_source",
+        source="slow-test-source",
+        ttl_seconds=60,
+        fetcher=fetcher,
+        serializer=lambda items: {"items": items},
+        deserializer=lambda payload: payload["items"],
+        empty_value=[],
+        timeout_seconds=0.01,
+    )
+
+    assert called is False
+    assert result == [{"name": "新鲜缓存"}]
+    assert status.status == "live"
+    assert "fresh SQLite cache" in status.detail
+
+
+async def test_cached_dashboard_source_skips_recent_failure_without_cache(tmp_path) -> None:
+    service = DashboardMarketService(
+        cache_ttl_seconds=90,
+        akshare_module=DashboardAkShare(),
+        snapshot_cache=MarketSnapshotCache(tmp_path / "market_cache.sqlite3"),
+    )
+    service._dashboard_failure_cache["dashboard:down_source"] = (time.time(), "source down")
+    called = False
+
+    def fetcher() -> list[dict[str, str]]:
+        nonlocal called
+        called = True
+        return [{"name": "should-not-fetch"}]
+
+    result, status = await service._cached_dashboard_source(
+        key="dashboard:down_source",
+        name="down_source",
+        source="down-test-source",
+        ttl_seconds=60,
+        fetcher=fetcher,
+        serializer=lambda items: {"items": items},
+        deserializer=lambda payload: payload["items"],
+        empty_value=[],
+        timeout_seconds=0.01,
+    )
+
+    assert called is False
+    assert result == []
+    assert status.status == "unavailable"
+    assert "recent source failure" in status.detail
+
+
+def test_dashboard_heatmap_runs_in_worker_without_injected_module(monkeypatch) -> None:
+    service = MarketDataService()
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_worker(operation: str, *args: str, timeout_seconds: float = 5.0):
+        calls.append((operation, args))
+        return [
+            {
+                "name": "银行",
+                "change_pct": 1.12,
+                "turnover": 4200000000,
+                "net_amount": 2250000000,
+                "direction": "up",
+                "source": "worker-akshare",
+            }
+        ]
+
+    monkeypatch.setattr(service, "_run_akshare_worker_sync", fake_worker)
+
+    items = service._fetch_fund_flow_heatmap_sync("industry")
+
+    assert calls == [("industry_heatmap", ())]
+    assert items[0].name == "银行"
+    assert items[0].source == "worker-akshare"
+
+
 async def test_dashboard_uses_real_sources_and_reports_cache_status(tmp_path) -> None:
     service = DashboardMarketService(
         cache_ttl_seconds=90,
@@ -159,6 +367,11 @@ async def test_dashboard_uses_real_sources_and_reports_cache_status(tmp_path) ->
     assert dashboard.region_heatmap[0].name == "上海"
     assert dashboard.fund_flow_summary is not None
     assert dashboard.fund_flow_summary.top_inflows[0].name == "贵州茅台"
+    assert dashboard.market_news[0].title == "央行开展公开市场操作"
+    assert dashboard.commodity_quotes[0].name == "黄金连续"
+    assert dashboard.commodity_quotes[0].sparkline
+    assert dashboard.dragon_tiger[0].name == "蓝黛科技"
+    assert dashboard.index_sparklines["000001.SH"][0] > 0
     assert all(status.status == "live" for status in dashboard.source_status)
     assert {quote.source for market in dashboard.markets for quote in market.indices} == {"test-real-quote"}
 
@@ -219,6 +432,24 @@ async def test_dashboard_reports_unavailable_without_fake_data(tmp_path) -> None
         def stock_sector_fund_flow_rank(self, indicator: str = "今日", sector_type: str = "地域资金流") -> FakeTable:
             raise RuntimeError("region down")
 
+        def stock_info_global_cls(self, symbol: str = "全部") -> FakeTable:
+            raise RuntimeError("news down")
+
+        def stock_info_global_em(self) -> FakeTable:
+            raise RuntimeError("news em down")
+
+        def stock_info_global_ths(self) -> FakeTable:
+            raise RuntimeError("news ths down")
+
+        def spot_quotations_sge(self, symbol: str = "Au99.99") -> FakeTable:
+            raise RuntimeError("commodity down")
+
+        def futures_global_spot_em(self) -> FakeTable:
+            raise RuntimeError("global commodity down")
+
+        def stock_lhb_detail_em(self, start_date: str, end_date: str) -> FakeTable:
+            raise RuntimeError("lhb down")
+
     service = DashboardMarketService(
         cache_ttl_seconds=90,
         akshare_module=FailingAkShare(),
@@ -233,6 +464,9 @@ async def test_dashboard_reports_unavailable_without_fake_data(tmp_path) -> None
     assert dashboard.industry_heatmap == []
     assert dashboard.concept_heatmap == []
     assert dashboard.region_heatmap == []
+    assert dashboard.market_news == []
+    assert dashboard.commodity_quotes == []
+    assert dashboard.dragon_tiger == []
     assert any(status.status == "unavailable" for status in dashboard.source_status)
 
 
@@ -255,3 +489,7 @@ def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
     assert body["primary_candles"]
     assert body["a_share_activity"]["advances"] == 2600
     assert body["industry_heatmap"][0]["name"] == "银行"
+    assert body["market_news"][0]["title"] == "央行开展公开市场操作"
+    assert body["commodity_quotes"][0]["name"] == "黄金连续"
+    assert body["dragon_tiger"][0]["name"] == "蓝黛科技"
+    assert body["index_sparklines"]["000001.SH"]

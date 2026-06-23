@@ -11,10 +11,6 @@ vi.mock("../lib/api", () => ({
   },
 }));
 
-vi.mock("../components/CandleChart", () => ({
-  CandleChart: ({ candles }: { candles: unknown[] }) => <div data-testid="candle-chart">candles:{candles.length}</div>,
-}));
-
 vi.mock("../components/Heatmap", () => ({
   Heatmap: ({ data }: { data: unknown[] }) => <div data-testid="heatmap">heat:{data.length}</div>,
 }));
@@ -25,6 +21,9 @@ const dashboard: MarketDashboardResponse = {
   source_status: [
     { name: "a_share_activity", status: "live", source: "legulegu-market-activity", detail: "", as_of: "2026-06-23T15:00:00Z" },
     { name: "region_heatmap", status: "stale", source: "eastmoney-sector-fund-flow", detail: "source down", as_of: "2026-06-23T14:40:00Z" },
+    { name: "market_news", status: "live", source: "cls-telegraph", detail: "", as_of: "2026-06-23T14:57:00Z" },
+    { name: "commodity_quotes", status: "live", source: "akshare-commodity", detail: "", as_of: "2026-06-23T14:57:00Z" },
+    { name: "dragon_tiger", status: "live", source: "eastmoney-lhb", detail: "", as_of: "2026-06-23T15:00:00Z" },
   ],
   primary_quote: {
     symbol: "000001.SH",
@@ -103,6 +102,45 @@ const dashboard: MarketDashboardResponse = {
   industry_heatmap: [{ name: "银行", change_pct: 1.12, turnover: 21850000000, net_amount: 2250000000, direction: "up", source: "ths-fund-flow" }],
   concept_heatmap: [{ name: "人工智能", change_pct: 2.35, turnover: 39000000000, net_amount: 3000000000, direction: "up", source: "ths-fund-flow" }],
   region_heatmap: [{ name: "上海", change_pct: 0.92, turnover: 33330000000, net_amount: 1220000000, direction: "up", source: "eastmoney-sector-fund-flow" }],
+  market_news: [
+    {
+      title: "央行开展公开市场操作",
+      content: "维护银行体系流动性合理充裕",
+      published_at: "2026-06-23T14:57:00+08:00",
+      source: "cls-telegraph",
+      url: "",
+    },
+  ],
+  commodity_quotes: [
+    {
+      symbol: "Au99.99",
+      name: "黄金连续",
+      price: 917.84,
+      change: 0.37,
+      change_pct: 0.04,
+      unit: "CNY/g",
+      source: "sge-spot",
+      as_of: "2026-06-23T14:57:00+08:00",
+      sparkline: [917.84, 918.21],
+    },
+  ],
+  dragon_tiger: [
+    {
+      symbol: "002765",
+      name: "蓝黛科技",
+      trade_date: "2026-06-23",
+      close: 110.43,
+      change_pct: 30,
+      net_amount: 220000000,
+      buy_amount: 350000000,
+      sell_amount: 130000000,
+      reason: "日涨幅偏离值达7%",
+      source: "eastmoney-lhb",
+    },
+  ],
+  index_sparklines: {
+    "000001.SH": [3001, 3008, 3011],
+  },
   disclaimer: "免费公开源可能延迟、缺失或被缓存。",
 };
 
@@ -120,21 +158,39 @@ function renderMarketPage() {
 }
 
 describe("MarketPage dashboard", () => {
-  it("renders the broker-style dashboard from real dashboard data", async () => {
+  it("shows a loading state while the dashboard request is still pending", () => {
+    vi.mocked(api.marketDashboard).mockReturnValue(new Promise(() => {}));
+
+    renderMarketPage();
+
+    expect(screen.getByText("正在加载真实市场数据")).toBeTruthy();
+    expect(screen.getAllByText("正在连接免费行情源和本地 SQLite 缓存。").length).toBeGreaterThan(0);
+    expect(screen.queryByText("不可用")).toBeNull();
+    expect(screen.queryByText("暂无真实指数行情")).toBeNull();
+  });
+
+  it("renders the reference-style market overview from real dashboard data", async () => {
     vi.mocked(api.marketDashboard).mockResolvedValue(dashboard);
 
     renderMarketPage();
 
-    expect(await screen.findByText("大盘趋势")).toBeTruthy();
-    expect(screen.getByText("市场情绪")).toBeTruthy();
+    expect(await screen.findByText("市场全景")).toBeTruthy();
+    expect(screen.getByText("全球指数")).toBeTruthy();
+    expect(screen.getByText("市场脉搏")).toBeTruthy();
+    expect(screen.getByText("7x24快讯")).toBeTruthy();
+    expect(screen.getByText("板块热力图")).toBeTruthy();
+    expect(screen.getByText("大宗商品")).toBeTruthy();
+    expect(screen.getByText("龙虎榜")).toBeTruthy();
     expect(await screen.findByText("贵州茅台")).toBeTruthy();
-    expect(screen.getAllByText("57.7")).toHaveLength(2);
     expect(screen.getByText("上证指数")).toBeTruthy();
-    expect(screen.getByText(/银行/)).toBeTruthy();
+    expect(screen.getAllByText(/银行/).length).toBeGreaterThan(0);
     expect(screen.getByText(/人工智能/)).toBeTruthy();
-    expect(screen.getByText(/上海/)).toBeTruthy();
+    expect(screen.getByText("央行开展公开市场操作")).toBeTruthy();
+    expect(screen.getByText("黄金连续")).toBeTruthy();
+    expect(screen.getByText("蓝黛科技")).toBeTruthy();
     expect(screen.getAllByText(/缓存/).length).toBeGreaterThan(0);
-    expect(screen.getByTestId("candle-chart").textContent).toContain("candles:1");
+    expect(screen.queryByText("大盘趋势")).toBeNull();
+    expect(screen.queryByText("市场情绪")).toBeNull();
   });
 
   it("shows unavailable modules without fake data", async () => {
@@ -146,6 +202,10 @@ describe("MarketPage dashboard", () => {
       industry_heatmap: [],
       concept_heatmap: [],
       region_heatmap: [],
+      market_news: [],
+      commodity_quotes: [],
+      dragon_tiger: [],
+      index_sparklines: {},
       source_status: [
         { name: "industry_heatmap", status: "unavailable", source: "ths-fund-flow", detail: "source down", as_of: null },
       ],
@@ -153,7 +213,10 @@ describe("MarketPage dashboard", () => {
 
     renderMarketPage();
 
-    expect(await screen.findByText("数据源暂不可用")).toBeTruthy();
+    expect(await screen.findByText(/数据源暂不可用/)).toBeTruthy();
+    expect(screen.getByText("暂无真实快讯")).toBeTruthy();
+    expect(screen.getByText("暂无真实商品行情")).toBeTruthy();
+    expect(screen.getByText("暂无真实龙虎榜")).toBeTruthy();
     expect(screen.queryByText("样例")).toBeNull();
   });
 });

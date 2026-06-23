@@ -1,218 +1,382 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, RefreshCw } from "lucide-react";
-import { CandleChart } from "../components/CandleChart";
-import { DashboardMetricCard } from "../components/DashboardMetricCard";
-import { EmptyState } from "../components/EmptyState";
-import { FundFlowList } from "../components/FundFlowList";
+import {
+  Activity,
+  BarChart3,
+  Flame,
+  Newspaper,
+  PackageOpen,
+  RefreshCw,
+  Trophy,
+} from "lucide-react";
 import { Heatmap } from "../components/Heatmap";
-import { SentimentGauge } from "../components/SentimentGauge";
 import { SourceStatusBadge } from "../components/SourceStatusBadge";
 import { api } from "../lib/api";
 import { formatCompact, formatMoney, formatNumber, toneForPct } from "../lib/format";
-import type { DashboardCacheStatus, DashboardHeatItem, DashboardSourceStatus } from "../lib/types";
-
-type KlinePeriod = "daily" | "weekly" | "monthly";
-type PeriodOption = { label: string; value: KlinePeriod | "intraday"; disabled?: boolean };
-
-const periodOptions: PeriodOption[] = [
-  { label: "分时", value: "intraday", disabled: true },
-  { label: "日K", value: "daily" },
-  { label: "周K", value: "weekly" },
-  { label: "月K", value: "monthly" },
-];
+import type {
+  AShareActivity,
+  CommodityQuote,
+  DragonTigerItem,
+  FundFlowSummary,
+  MarketNewsItem,
+  QuoteSnapshot,
+} from "../lib/types";
 
 export function MarketPage() {
-  const [period, setPeriod] = useState<KlinePeriod>("daily");
   const dashboard = useQuery({
-    queryKey: ["market-dashboard", period],
-    queryFn: () => api.marketDashboard(["CN", "HK", "US"], period),
+    queryKey: ["market-dashboard", "reference-overview"],
+    queryFn: () => api.marketDashboard(["CN", "HK", "US"], "daily"),
   });
   const data = dashboard.data;
-  const primaryQuote = data?.primary_quote;
-  const activity = data?.a_share_activity;
+  const isInitialLoading = dashboard.isPending && !data;
+  const indexQuotes = data?.markets.flatMap((market) => market.indices) || [];
+  const aShare = data?.markets.find((market) => market.market === "CN");
+  const heatmapData = [
+    ...(data?.industry_heatmap || []),
+    ...(data?.concept_heatmap || []),
+    ...(data?.region_heatmap || []),
+  ];
+  const hasUnavailableSource = data?.source_status.some((status) => status.status === "unavailable");
 
   return (
-    <div className="market-dashboard">
-      <section className="dashboard-heading">
+    <div className="market-overview-board">
+      <section className="market-hero-strip">
         <div>
-          <h2>大盘趋势</h2>
-          <p>查看大盘走势，把握市场节奏、洞察资金动向，辅助投资决策。</p>
+          <span className="market-kicker">进入资金信号沙盘</span>
+          <h2>市场全景</h2>
+          <p>聚合全球指数、A股脉搏、快讯、板块资金、大宗商品和龙虎榜，所有模块仅展示真实源或缓存。</p>
         </div>
-        <div className="heading-status">
-          <SourceStatusBadge status={data?.cache_status || "unavailable"} />
-          <button className="terminal-button soft" onClick={() => dashboard.refetch()}>
-            <RefreshCw size={16} />
+        <div className="market-hero-actions">
+          <span className="market-clock">更新 {isInitialLoading ? "加载中" : formatDateTime(data?.as_of)}</span>
+          <SourceStatusBadge status={isInitialLoading ? "loading" : data?.cache_status || "unavailable"} />
+          <button className="terminal-button soft market-refresh" onClick={() => dashboard.refetch()} type="button">
+            <RefreshCw size={15} />
             刷新
           </button>
         </div>
       </section>
 
-      {dashboard.isError ? (
-        <EmptyState title="行情加载失败" body="请确认后端 API 已启动，或稍后重试。不会展示样例行情作为真实数据。" />
+      {isInitialLoading ? (
+        <div className="source-loading-banner">
+          <strong>正在加载真实市场数据</strong>
+          <span>正在连接免费行情源和本地 SQLite 缓存。</span>
+        </div>
       ) : null}
 
-      {data?.source_status.some((status) => status.status === "unavailable") ? (
-        <div className="source-warning">数据源暂不可用，页面仅展示其它真实源或 SQLite 最近成功缓存。</div>
+      {!isInitialLoading && (dashboard.isError || hasUnavailableSource) ? (
+        <div className="source-warning">数据源暂不可用；页面仅展示其它真实来源或 SQLite 最近缓存。</div>
       ) : null}
 
-      <div className="dashboard-main-grid">
-        <section className="dashboard-panel chart-panel">
-          <div className="panel-head dashboard-panel-head">
-            <div>
-              <h3>上证指数走势</h3>
-              <span>
-                {primaryQuote?.as_of ? new Date(primaryQuote.as_of).toLocaleString("zh-CN") : "等待真实行情"}
-                {primaryQuote ? `　收 ${formatNumber(primaryQuote.price, 2)}` : ""}
-                {primaryQuote ? `　涨跌 ${formatNumber(primaryQuote.change, 2)} (${formatNumber(primaryQuote.change_pct, 2)}%)` : ""}
-              </span>
-            </div>
-            <div className="period-tabs">
-              {periodOptions.map((item) => (
-                <button
-                  key={item.value}
-                  disabled={item.disabled}
-                  className={period === item.value ? "active" : ""}
-                  onClick={() => {
-                    if (!item.disabled && item.value !== "intraday") {
-                      setPeriod(item.value);
-                    }
-                  }}
-                  type="button"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="moving-average-row">
-            <span>MA5: 真实源暂未提供</span>
-            <span>MA10: 真实源暂未提供</span>
-            <span>MA20: 真实源暂未提供</span>
-          </div>
-          {data?.primary_candles.length ? <CandleChart candles={data.primary_candles} /> : <div className="chart-skeleton" />}
-          <div className="chart-footnote">分时数据暂未接入免费真实源；首版支持日K、周K、月K。</div>
-        </section>
-
-        <section className="dashboard-panel sentiment-panel">
-          <div className="panel-head dashboard-panel-head">
-            <div>
-              <h3>市场情绪</h3>
-              <span>综合资金流、赚钱效应、涨跌市场氛围</span>
-            </div>
-          </div>
-          <SentimentGauge activity={activity || null} />
-        </section>
-      </div>
-
-      <div className="dashboard-metric-grid">
-        <DashboardMetricCard title="A股概览" value={activity ? `${formatNumber(activity.sentiment, 1)}` : "--"} detail="赚钱效应活跃度" accent="blue">
-          <div className="mini-stat-grid">
-            <span>涨 {activity?.advances ?? "--"}</span>
-            <span>跌 {activity?.declines ?? "--"}</span>
-            <span>平 {activity?.unchanged ?? "--"}</span>
-          </div>
-        </DashboardMetricCard>
-
-        {data?.markets.flatMap((market) =>
-          market.indices.slice(0, market.market === "CN" ? 3 : 2).map((quote) => (
-            <DashboardMetricCard
-              key={quote.symbol}
-              title={quote.name}
-              value={formatNumber(quote.price, 2)}
-              detail={`${formatNumber(quote.change, 2)}　${formatNumber(quote.change_pct, 2)}%`}
-              accent={quote.change_pct >= 0 ? "red" : "green"}
-            />
-          )),
-        )}
-
-        <section className="dashboard-panel compact-list-panel">
-          <div className="panel-head dashboard-panel-head">
-            <div>
-              <h3>资金流向</h3>
-              <span>同花顺个股资金流真实源</span>
-            </div>
-          </div>
-          <FundFlowList summary={data?.fund_flow_summary || null} />
-        </section>
-      </div>
-
-      <div className="dashboard-heatmap-grid">
-        <DashboardHeatmapPanel title="行业涨跌热力图（申万一级）" actionLabel="更多行业" data={data?.industry_heatmap || []} />
-        <DashboardHeatmapPanel title="概念涨跌热力图" actionLabel="更多概念" data={data?.concept_heatmap || []} />
-        <DashboardHeatmapPanel title="地域涨跌热力图" actionLabel="更多地区" data={data?.region_heatmap || []} />
-      </div>
-
-      <section className="dashboard-panel source-panel">
-        <div className="panel-head dashboard-panel-head">
-          <div>
-            <h3>数据源状态</h3>
-            <span>{data?.disclaimer || "严格真实模式：无真实源或缓存时不展示样例数据。"}</span>
-          </div>
-        </div>
-        <div className="source-status-grid">
-          {(data?.source_status || []).map((status) => (
-            <SourceStatusRow key={`${status.name}-${status.source}`} status={status} />
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function DashboardHeatmapPanel({
-  title,
-  actionLabel,
-  data,
-}: {
-  title: string;
-  actionLabel: string;
-  data: DashboardHeatItem[];
-}) {
-  return (
-    <section className="dashboard-panel heatmap-panel">
-      <div className="panel-head dashboard-panel-head">
-        <div>
-          <h3>{title}</h3>
-          <span>按真实资金流和涨跌幅排序</span>
-        </div>
-        <button type="button" className="panel-link">
-          {actionLabel}
-          <ChevronRight size={15} />
-        </button>
-      </div>
-      {data.length ? (
-        <>
-          <Heatmap data={data} />
-          <div className="heatmap-strip">
-            {data.slice(0, 4).map((item) => (
-              <span key={item.name} className={`tone-text ${toneForPct(item.change_pct)}`}>
-                {item.name} {formatNumber(item.change_pct, 2)}% / {formatMoney(item.net_amount)}
-              </span>
+      <section className="market-block">
+        <SectionTitle icon={BarChart3} title="全球指数" subtitle="A股、港股、美股核心指数与短线轨迹" />
+        {isInitialLoading ? (
+          <MarketLoading title="正在加载指数行情" />
+        ) : indexQuotes.length ? (
+          <div className="index-card-grid">
+            {indexQuotes.map((quote) => (
+              <IndexCard key={quote.symbol} quote={quote} values={data?.index_sparklines[quote.symbol] || []} />
             ))}
           </div>
-        </>
-      ) : (
-        <div className="dashboard-empty">
-          <strong>暂无真实数据</strong>
-          <span>该模块无可用真实数据或 SQLite 缓存。</span>
-        </div>
-      )}
-    </section>
-  );
-}
+        ) : (
+          <MarketEmpty title="暂无真实指数行情" />
+        )}
+      </section>
 
-function SourceStatusRow({ status }: { status: DashboardSourceStatus }) {
-  return (
-    <div className="source-status-row">
-      <div>
-        <strong>{status.name}</strong>
-        <span>{status.source}</span>
-      </div>
-      <div>
-        <SourceStatusBadge status={status.status} />
-        {status.as_of ? <span>{new Date(status.as_of).toLocaleString("zh-CN")}</span> : null}
+      <section className="market-block">
+        <SectionTitle icon={Activity} title="市场脉搏" subtitle="成交、涨跌家数、赚钱效应与资金流" />
+        <div className="pulse-grid">
+          <PulseMetric label="两市成交额" value={isInitialLoading ? "加载中" : aShare ? formatMoney(aShare.turnover * 100000000) : "--"} detail="A股主要指数口径" />
+          <PulseMetric
+            label="涨 / 跌"
+            value={isInitialLoading ? "加载中" : formatBreadth(data?.a_share_activity)}
+            detail={`平盘 ${data?.a_share_activity?.unchanged ?? "--"}`}
+            tone="split"
+          />
+          <PulseMetric label="情绪温度" value={isInitialLoading ? "加载中" : data?.a_share_activity ? formatNumber(data.a_share_activity.sentiment, 1) : "--"} detail="中性线 50" />
+          <PulseMetric
+            label="主力净流入"
+            value={isInitialLoading ? "加载中" : data?.fund_flow_summary ? formatMoney(data.fund_flow_summary.net_amount) : "--"}
+            detail={isInitialLoading ? "等待资金流真实源" : data?.fund_flow_summary?.source || "无可用真实源"}
+            tone={(data?.fund_flow_summary?.net_amount || 0) >= 0 ? "up" : "down"}
+          />
+        </div>
+        {isInitialLoading ? <MarketLoading title="正在加载涨跌家数" compact /> : <BreadthBar activity={data?.a_share_activity || null} />}
+        {isInitialLoading ? <MarketLoading title="正在加载资金流" compact /> : <FundFlowStrip summary={data?.fund_flow_summary || null} />}
+      </section>
+
+      <section className="market-block news-block">
+        <SectionTitle icon={Newspaper} title="7x24快讯" subtitle="全局财经快讯，按发布时间倒序" />
+        {isInitialLoading ? <MarketLoading title="正在加载真实快讯" /> : <NewsTimeline news={data?.market_news || []} />}
+      </section>
+
+      <section className="market-block heatmap-board">
+        <SectionTitle icon={Flame} title="板块热力图" subtitle="行业、概念、地域资金流合并视图" />
+        {isInitialLoading ? (
+          <MarketLoading title="正在加载板块热力" />
+        ) : heatmapData.length ? (
+          <>
+            <Heatmap data={heatmapData} />
+            <div className="heat-chip-row">
+              {heatmapData.slice(0, 10).map((item) => (
+                <span key={`${item.source}-${item.name}`} className={`heat-chip tone-text ${toneForPct(item.change_pct)}`}>
+                  {item.name} {formatNumber(item.change_pct, 2)}%
+                </span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <MarketEmpty title="暂无真实板块热力" />
+        )}
+      </section>
+
+      <div className="lower-market-grid">
+        <section className="market-block">
+          <SectionTitle icon={PackageOpen} title="大宗商品" subtitle="贵金属与海外商品期货" />
+          {isInitialLoading ? <MarketLoading title="正在加载商品行情" /> : <CommodityPanel quotes={data?.commodity_quotes || []} />}
+        </section>
+        <section className="market-block">
+          <SectionTitle icon={Trophy} title="龙虎榜" subtitle="最近交易日净买额排行" />
+          {isInitialLoading ? <MarketLoading title="正在加载龙虎榜" /> : <DragonTigerList items={data?.dragon_tiger || []} />}
+        </section>
       </div>
     </div>
   );
+}
+
+function SectionTitle({
+  icon: Icon,
+  title,
+  subtitle,
+}: {
+  icon: typeof Activity;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="market-section-title">
+      <div>
+        <Icon size={16} />
+        <h3>{title}</h3>
+      </div>
+      <span>{subtitle}</span>
+    </div>
+  );
+}
+
+function IndexCard({ quote, values }: { quote: QuoteSnapshot; values: number[] }) {
+  const tone = toneForPct(quote.change_pct);
+  return (
+    <article className={`index-card index-${tone}`}>
+      <div className="index-meta">
+        <span>{quote.symbol}</span>
+        <strong>{quote.name}</strong>
+      </div>
+      <div className="index-price-row">
+        <span className="index-price">{formatNumber(quote.price, 2)}</span>
+        <span className={`pct-pill ${tone}`}>{formatSignedPct(quote.change_pct)}</span>
+      </div>
+      <Sparkline values={values} tone={tone} />
+      <div className="index-source">{quote.delay_label}</div>
+    </article>
+  );
+}
+
+function Sparkline({ values, tone }: { values: number[]; tone: "up" | "down" | "neutral" }) {
+  if (values.length < 2) {
+    return <div className="sparkline-empty" />;
+  }
+  const width = 150;
+  const height = 48;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const spread = max - min || 1;
+  const points = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * width;
+      const y = height - ((value - min) / spread) * (height - 8) - 4;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  return (
+    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="指数短线走势">
+      <polyline className={`sparkline-line ${tone}`} points={points} />
+    </svg>
+  );
+}
+
+function PulseMetric({
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: "neutral" | "up" | "down" | "split";
+}) {
+  return (
+    <article className={`pulse-metric pulse-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
+}
+
+function BreadthBar({ activity }: { activity: AShareActivity | null }) {
+  if (!activity) {
+    return <MarketEmpty title="暂无真实涨跌家数" compact />;
+  }
+  const total = Math.max(1, activity.advances + activity.declines + activity.unchanged);
+  const up = (activity.advances / total) * 100;
+  const flat = (activity.unchanged / total) * 100;
+  const down = Math.max(0, 100 - up - flat);
+  return (
+    <div className="breadth-panel">
+      <div className="breadth-labels">
+        <span>上涨 {activity.advances}</span>
+        <span>下跌 {activity.declines}</span>
+        <span>涨停 {activity.limit_up}</span>
+        <span>跌停 {activity.limit_down}</span>
+      </div>
+      <div className="breadth-track" aria-label="市场涨跌家数比例">
+        <span className="breadth-up" style={{ width: `${up}%` }} />
+        <span className="breadth-flat" style={{ width: `${flat}%` }} />
+        <span className="breadth-down" style={{ width: `${down}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function FundFlowStrip({ summary }: { summary: FundFlowSummary | null }) {
+  if (!summary) {
+    return <MarketEmpty title="暂无真实资金流" compact />;
+  }
+  const rows = [...summary.top_inflows, ...summary.top_outflows].slice(0, 8);
+  return (
+    <div className="fund-flow-strip">
+      {rows.map((item) => (
+        <div key={`${item.symbol}-${item.name}`}>
+          <strong>{item.name}</strong>
+          <span className={item.net_amount >= 0 ? "tone-red" : "tone-green"}>{formatMoney(item.net_amount)}</span>
+          <small>{formatSignedPct(item.change_pct)}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NewsTimeline({ news }: { news: MarketNewsItem[] }) {
+  if (!news.length) {
+    return <MarketEmpty title="暂无真实快讯" />;
+  }
+  return (
+    <div className="news-timeline">
+      {news.slice(0, 8).map((item) => (
+        <a href={item.url || undefined} key={`${item.published_at}-${item.title}`} target={item.url ? "_blank" : undefined} rel="noreferrer">
+          <time>{formatNewsTime(item.published_at)}</time>
+          <strong>{item.title}</strong>
+          <span>{item.content || item.source}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function CommodityPanel({ quotes }: { quotes: CommodityQuote[] }) {
+  if (!quotes.length) {
+    return <MarketEmpty title="暂无真实商品行情" />;
+  }
+  return (
+    <div className="commodity-list">
+      {quotes.map((quote) => {
+        const tone = toneForPct(quote.change_pct);
+        return (
+          <div className="commodity-row" key={`${quote.source}-${quote.symbol}`}>
+            <div>
+              <strong>{quote.name}</strong>
+              <span>{quote.symbol}</span>
+            </div>
+            <div>
+              <strong>{formatNumber(quote.price, 2)}</strong>
+              <span className={`tone-text ${tone}`}>{formatSignedPct(quote.change_pct)}</span>
+            </div>
+            <Sparkline values={quote.sparkline} tone={tone} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DragonTigerList({ items }: { items: DragonTigerItem[] }) {
+  if (!items.length) {
+    return <MarketEmpty title="暂无真实龙虎榜" />;
+  }
+  return (
+    <div className="dragon-list">
+      {items.slice(0, 10).map((item, index) => (
+        <div className="dragon-row" key={`${item.trade_date}-${item.symbol}`}>
+          <span className="rank-number">{index + 1}</span>
+          <div>
+            <strong>{item.name}</strong>
+            <span>{item.symbol} · {item.reason || item.trade_date}</span>
+          </div>
+          <div>
+            <strong>{formatNumber(item.close, 2)}</strong>
+            <span className={`tone-text ${toneForPct(item.change_pct)}`}>{formatSignedPct(item.change_pct)}</span>
+          </div>
+          <span className={item.net_amount >= 0 ? "tone-red" : "tone-green"}>{formatMoney(item.net_amount)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MarketEmpty({ title, compact = false }: { title: string; compact?: boolean }) {
+  return (
+    <div className={`market-empty${compact ? " compact" : ""}`}>
+      <strong>{title}</strong>
+      <span>无可用真实数据或缓存。</span>
+    </div>
+  );
+}
+
+function MarketLoading({ title, compact = false }: { title: string; compact?: boolean }) {
+  return (
+    <div className={`market-empty market-loading${compact ? " compact" : ""}`}>
+      <strong>{title}</strong>
+      <span>正在连接免费行情源和本地 SQLite 缓存。</span>
+    </div>
+  );
+}
+
+function formatBreadth(activity?: AShareActivity | null): string {
+  if (!activity) {
+    return "--";
+  }
+  return `${formatCompact(activity.advances)} / ${formatCompact(activity.declines)}`;
+}
+
+function formatSignedPct(value: number): string {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value, 2)}%`;
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "--";
+  }
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatNewsTime(value?: string | null): string {
+  if (!value) {
+    return "--:--";
+  }
+  return new Date(value).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }

@@ -216,6 +216,22 @@ async def test_akshare_calls_ignore_proxy_environment(monkeypatch) -> None:
     assert __import__("os").environ["HTTPS_PROXY"] == "http://127.0.0.1:7890"
 
 
+def test_real_akshare_quote_runs_in_worker_without_injected_module(monkeypatch) -> None:
+    service = MarketDataService()
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_worker(operation: str, *args: str, timeout_seconds: float = 5.0):
+        calls.append((operation, args))
+        return service._sample_quote(args[0]).model_copy(update={"source": "worker-akshare"}).model_dump(mode="json")
+
+    monkeypatch.setattr(service, "_run_akshare_worker_sync", fake_worker)
+
+    quote = service._fetch_akshare_quote_sync("600519.SH")
+
+    assert calls == [("quote", ("600519.SH",))]
+    assert quote.source == "worker-akshare"
+
+
 def test_parses_tencent_quote_line() -> None:
     line = (
         'v_sh600519="1~贵州茅台~600519~1215.00~1240.00~1235.00~57472~25106~32365~'

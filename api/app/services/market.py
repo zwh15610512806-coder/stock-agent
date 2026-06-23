@@ -1,7 +1,10 @@
 import asyncio
+import json
 import os
 import importlib
 import math
+import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
@@ -14,11 +17,14 @@ import httpx
 from app.schemas.market import (
     AShareActivity,
     CandleSnapshot,
+    CommodityQuote,
     DashboardCacheStatus,
     DashboardHeatItem,
     DashboardSourceStatus,
+    DragonTigerItem,
     FundFlowItem,
     FundFlowSummary,
+    MarketNewsItem,
     MarketBreadth,
     MarketCode,
     MarketDashboardResponse,
@@ -44,8 +50,16 @@ DELAY = "免费公开源，可能延迟、缺失或被缓存"
 LEGU_SOURCE = "legulegu-market-activity"
 THS_SOURCE = "ths-fund-flow"
 EASTMONEY_SOURCE = "eastmoney-sector-fund-flow"
+NEWS_SOURCE = "cls-telegraph"
+COMMODITY_SOURCE = "akshare-commodity"
+LHB_SOURCE = "eastmoney-lhb"
 SNAPSHOT_TTL_SECONDS = 10 * 60
 SLOW_SNAPSHOT_TTL_SECONDS = 30 * 60
+DASHBOARD_SOURCE_TIMEOUT_SECONDS = 5.0
+DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS = 5.0
+DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS = 2.0
+DASHBOARD_FAILURE_COOLDOWN_SECONDS = 3 * 60
+AKSHARE_WORKER_ENV = "ZTOU_AKSHARE_WORKER"
 T = TypeVar("T")
 
 INDEX_SYMBOLS: dict[MarketCode, list[tuple[str, str]]] = {
@@ -89,6 +103,7 @@ class MarketDataService:
         self.snapshot_cache = snapshot_cache or MarketSnapshotCache(_default_snapshot_cache_path())
         self._quote_cache: dict[str, tuple[float, QuoteSnapshot]] = {}
         self._candle_cache: dict[tuple[str, str, int], tuple[float, list[CandleSnapshot]]] = {}
+        self._dashboard_failure_cache: dict[str, tuple[float, str]] = {}
 
     async def overview(self, markets: list[MarketCode]) -> list[MarketOverviewItem]:
         now = datetime.now(UTC)
@@ -156,16 +171,15 @@ class MarketDataService:
         normalized_period = period if period in {"daily", "weekly", "monthly"} else "daily"
         source_status: list[DashboardSourceStatus] = []
 
-        primary_quote, primary_quote_status = await self._fetch_dashboard_quote("000001.SH")
-        source_status.append(primary_quote_status)
-        primary_candles, primary_candles_status = await self._fetch_dashboard_candles(
-            "000001.SH",
-            normalized_period,
-            120,
+        primary_quote_task = asyncio.create_task(self._fetch_dashboard_quote("000001.SH"))
+        primary_candles_task = asyncio.create_task(
+            self._fetch_dashboard_candles(
+                "000001.SH",
+                normalized_period,
+                120,
+            )
         )
-        source_status.append(primary_candles_status)
-
-        activity, activity_status = await self._cached_dashboard_source(
+        activity_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:a_share_activity",
             name="a_share_activity",
             source=LEGU_SOURCE,
@@ -174,10 +188,10 @@ class MarketDataService:
             serializer=lambda item: item.model_dump(mode="json"),
             deserializer=lambda payload: AShareActivity.model_validate(payload),
             empty_value=None,
-        )
-        source_status.append(activity_status)
+            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+        ))
 
-        industry_heatmap, industry_status = await self._cached_dashboard_source(
+        industry_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:industry_heatmap",
             name="industry_heatmap",
             source=THS_SOURCE,
@@ -186,10 +200,10 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-        )
-        source_status.append(industry_status)
+            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+        ))
 
-        concept_heatmap, concept_status = await self._cached_dashboard_source(
+        concept_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:concept_heatmap",
             name="concept_heatmap",
             source=THS_SOURCE,
@@ -198,10 +212,10 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-        )
-        source_status.append(concept_status)
+            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+        ))
 
-        region_heatmap, region_status = await self._cached_dashboard_source(
+        region_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:region_heatmap",
             name="region_heatmap",
             source=EASTMONEY_SOURCE,
@@ -210,10 +224,10 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-        )
-        source_status.append(region_status)
+            timeout_seconds=DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS,
+        ))
 
-        fund_flow_summary, fund_status = await self._cached_dashboard_source(
+        fund_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:fund_flow_summary",
             name="fund_flow_summary",
             source=THS_SOURCE,
@@ -222,11 +236,89 @@ class MarketDataService:
             serializer=lambda item: item.model_dump(mode="json"),
             deserializer=lambda payload: FundFlowSummary.model_validate(payload),
             empty_value=None,
-        )
-        source_status.append(fund_status)
+            timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS,
+        ))
 
-        market_items, market_status = await self._dashboard_markets(normalized_markets, activity)
-        source_status.append(market_status)
+        news_task = asyncio.create_task(self._cached_dashboard_source(
+            key="dashboard:market_news",
+            name="market_news",
+            source=NEWS_SOURCE,
+            ttl_seconds=SNAPSHOT_TTL_SECONDS,
+            fetcher=self._fetch_market_news_sync,
+            serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
+            deserializer=lambda payload: [MarketNewsItem.model_validate(item) for item in payload.get("items", [])],
+            empty_value=[],
+            timeout_seconds=DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS,
+        ))
+
+        commodity_task = asyncio.create_task(self._cached_dashboard_source(
+            key="dashboard:commodity_quotes",
+            name="commodity_quotes",
+            source=COMMODITY_SOURCE,
+            ttl_seconds=SNAPSHOT_TTL_SECONDS,
+            fetcher=self._fetch_commodity_quotes_sync,
+            serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
+            deserializer=lambda payload: [CommodityQuote.model_validate(item) for item in payload.get("items", [])],
+            empty_value=[],
+            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+        ))
+
+        dragon_tiger_task = asyncio.create_task(self._cached_dashboard_source(
+            key="dashboard:dragon_tiger",
+            name="dragon_tiger",
+            source=LHB_SOURCE,
+            ttl_seconds=SLOW_SNAPSHOT_TTL_SECONDS,
+            fetcher=self._fetch_dragon_tiger_sync,
+            serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
+            deserializer=lambda payload: [DragonTigerItem.model_validate(item) for item in payload.get("items", [])],
+            empty_value=[],
+            timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS,
+        ))
+
+        activity, activity_status = await activity_task
+        market_task = asyncio.create_task(self._dashboard_markets(normalized_markets, activity))
+        market_items, market_status = await market_task
+        sparkline_task = asyncio.create_task(self._dashboard_index_sparklines(market_items))
+
+        (
+            (primary_quote, primary_quote_status),
+            (primary_candles, primary_candles_status),
+            (industry_heatmap, industry_status),
+            (concept_heatmap, concept_status),
+            (region_heatmap, region_status),
+            (fund_flow_summary, fund_status),
+            (market_news, news_status),
+            (commodity_quotes, commodity_status),
+            (dragon_tiger, dragon_tiger_status),
+            (index_sparklines, sparkline_status),
+        ) = await asyncio.gather(
+            primary_quote_task,
+            primary_candles_task,
+            industry_task,
+            concept_task,
+            region_task,
+            fund_task,
+            news_task,
+            commodity_task,
+            dragon_tiger_task,
+            sparkline_task,
+        )
+        source_status.extend(
+            [
+                primary_quote_status,
+                primary_candles_status,
+                activity_status,
+                industry_status,
+                concept_status,
+                region_status,
+                fund_status,
+                news_status,
+                commodity_status,
+                dragon_tiger_status,
+                market_status,
+                sparkline_status,
+            ]
+        )
 
         return MarketDashboardResponse(
             as_of=datetime.now(UTC),
@@ -240,19 +332,27 @@ class MarketDataService:
             industry_heatmap=industry_heatmap,
             concept_heatmap=concept_heatmap,
             region_heatmap=region_heatmap,
+            market_news=market_news,
+            commodity_quotes=commodity_quotes,
+            dragon_tiger=dragon_tiger,
+            index_sparklines=index_sparklines,
             disclaimer="免费公开源可能延迟、缺失或被缓存；缓存数据会在来源状态中标记。",
         )
 
     async def _fetch_dashboard_quote(self, symbol: str) -> tuple[QuoteSnapshot | None, DashboardSourceStatus]:
         try:
-            quote = await self._fetch_quote_without_sample(symbol)
+            quote = await asyncio.wait_for(
+                self._fetch_quote_without_sample(symbol),
+                timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            )
             return quote, DashboardSourceStatus(name="primary_quote", status="live", source=quote.source, as_of=quote.as_of)
         except Exception as exc:
+            detail = f"source timed out after {DASHBOARD_SOURCE_TIMEOUT_SECONDS:g}s" if isinstance(exc, TimeoutError) else str(exc)
             return None, DashboardSourceStatus(
                 name="primary_quote",
                 status="unavailable",
                 source="market-quote",
-                detail=str(exc),
+                detail=detail,
             )
 
     async def _fetch_dashboard_candles(
@@ -262,17 +362,21 @@ class MarketDataService:
         limit: int,
     ) -> tuple[list[CandleSnapshot], DashboardSourceStatus]:
         try:
-            candles = await self._fetch_primary_candles(normalize_symbol(symbol, None), period, limit)
+            candles = await asyncio.wait_for(
+                self._fetch_primary_candles(normalize_symbol(symbol, None), period, limit),
+                timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            )
             source = candles[-1].source if candles else "market-candles"
             if source == "sample fallback":
                 raise RuntimeError(f"sample candles rejected for dashboard: {symbol}")
             return candles, DashboardSourceStatus(name="primary_candles", status="live", source=source)
         except Exception as exc:
+            detail = f"source timed out after {DASHBOARD_SOURCE_TIMEOUT_SECONDS:g}s" if isinstance(exc, TimeoutError) else str(exc)
             return [], DashboardSourceStatus(
                 name="primary_candles",
                 status="unavailable",
                 source="market-candles",
-                detail=str(exc),
+                detail=detail,
             )
 
     async def _dashboard_markets(
@@ -283,8 +387,14 @@ class MarketDataService:
         statuses: list[str] = []
 
         async def build_market(market: MarketCode) -> MarketOverviewItem:
+            async def fetch_index_quote(symbol: str) -> QuoteSnapshot:
+                return await asyncio.wait_for(
+                    self._fetch_quote_without_sample(symbol),
+                    timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+                )
+
             quotes = await asyncio.gather(
-                *(self._fetch_quote_without_sample(symbol) for symbol, _ in INDEX_SYMBOLS[market]),
+                *(fetch_index_quote(symbol) for symbol, _ in INDEX_SYMBOLS[market]),
                 return_exceptions=True,
             )
             live_quotes = [quote for quote in quotes if isinstance(quote, QuoteSnapshot)]
@@ -337,18 +447,40 @@ class MarketDataService:
         serializer: Callable[[T], dict[str, Any]],
         deserializer: Callable[[dict[str, Any]], T],
         empty_value: T,
+        timeout_seconds: float = DASHBOARD_SOURCE_TIMEOUT_SECONDS,
     ) -> tuple[T, DashboardSourceStatus]:
+        cached = self.snapshot_cache.get(key)
+        if cached is not None and not cached.is_stale:
+            return deserializer(cached.payload), DashboardSourceStatus(
+                name=name,
+                status="live",
+                source=cached.source,
+                detail="served from fresh SQLite cache",
+                as_of=cached.fetched_at,
+            )
+        failed = self._dashboard_failure_cache.get(key)
+        if failed is not None and time.time() - failed[0] < DASHBOARD_FAILURE_COOLDOWN_SECONDS:
+            detail = f"recent source failure: {failed[1]}"
+            if cached is not None:
+                return deserializer(cached.payload), _cached_status(name, cached, detail)
+            return empty_value, DashboardSourceStatus(name=name, status="unavailable", source=source, detail=detail)
         try:
-            result = await asyncio.to_thread(fetcher)
+            result = await asyncio.wait_for(asyncio.to_thread(fetcher), timeout=timeout_seconds)
             self.snapshot_cache.save(key, serializer(result), source, ttl_seconds)
+            self._dashboard_failure_cache.pop(key, None)
             return result, DashboardSourceStatus(name=name, status="live", source=source, as_of=datetime.now(UTC))
         except Exception as exc:
+            detail = f"source timed out after {timeout_seconds:g}s" if isinstance(exc, TimeoutError) else str(exc)
+            self._dashboard_failure_cache[key] = (time.time(), detail)
             cached = self.snapshot_cache.get(key)
             if cached is not None:
-                return deserializer(cached.payload), _cached_status(name, cached, str(exc))
-            return empty_value, DashboardSourceStatus(name=name, status="unavailable", source=source, detail=str(exc))
+                return deserializer(cached.payload), _cached_status(name, cached, detail)
+            return empty_value, DashboardSourceStatus(name=name, status="unavailable", source=source, detail=detail)
 
     def _fetch_a_share_activity_sync(self) -> AShareActivity:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("a_share_activity")
+            return AShareActivity.model_validate(payload)
         with _without_proxy_env():
             rows = _records(self._akshare().stock_market_activity_legu())
         values = {str(_row_value(row, ("item",))): _row_value(row, ("value",)) for row in rows}
@@ -366,6 +498,9 @@ class MarketDataService:
         )
 
     def _fetch_fund_flow_heatmap_sync(self, kind: str) -> list[DashboardHeatItem]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync(f"{kind}_heatmap")
+            return [DashboardHeatItem.model_validate(item) for item in payload]
         with _without_proxy_env():
             akshare = self._akshare()
             if kind == "industry":
@@ -377,6 +512,9 @@ class MarketDataService:
         return _heat_items_from_rows(rows, THS_SOURCE, limit=12)
 
     def _fetch_region_heatmap_sync(self) -> list[DashboardHeatItem]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("region_heatmap")
+            return [DashboardHeatItem.model_validate(item) for item in payload]
         with _without_proxy_env():
             rows = _records(
                 self._akshare().stock_sector_fund_flow_rank(
@@ -387,6 +525,9 @@ class MarketDataService:
         return _heat_items_from_rows(rows, EASTMONEY_SOURCE, limit=12)
 
     def _fetch_fund_flow_summary_sync(self) -> FundFlowSummary:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("fund_flow_summary", timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS)
+            return FundFlowSummary.model_validate(payload)
         with _without_proxy_env():
             rows = _records(self._akshare().stock_fund_flow_individual(symbol="即时"))
         items = [_fund_flow_item_from_row(row) for row in rows]
@@ -399,6 +540,112 @@ class MarketDataService:
             net_amount=sum(item.net_amount for item in items),
             source=THS_SOURCE,
             as_of=datetime.now(UTC),
+        )
+
+    def _fetch_market_news_sync(self) -> list[MarketNewsItem]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("market_news")
+            return [MarketNewsItem.model_validate(item) for item in payload]
+        akshare = self._akshare()
+        errors: list[str] = []
+        for source, fetcher in (
+            (NEWS_SOURCE, lambda: akshare.stock_info_global_cls(symbol="全部")),
+            ("eastmoney-global-news", lambda: akshare.stock_info_global_em()),
+            ("ths-global-news", lambda: akshare.stock_info_global_ths()),
+        ):
+            try:
+                with _without_proxy_env():
+                    rows = _records(fetcher())
+                items = _news_items_from_rows(rows, source)
+                if items:
+                    return items[:12]
+            except Exception as exc:
+                errors.append(f"{source}: {exc}")
+        raise RuntimeError("; ".join(errors) or "market news returned no rows")
+
+    def _fetch_commodity_quotes_sync(self) -> list[CommodityQuote]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("commodity_quotes")
+            return [CommodityQuote.model_validate(item) for item in payload]
+        akshare = self._akshare()
+        items: list[CommodityQuote] = []
+        with _without_proxy_env():
+            for symbol, name, unit in (
+                ("Au99.99", "黄金连续", "CNY/g"),
+                ("Ag(T+D)", "白银延期", "CNY/kg"),
+            ):
+                try:
+                    rows = _records(akshare.spot_quotations_sge(symbol=symbol))
+                    quote = _commodity_from_sge_rows(rows, symbol, name, unit)
+                    if quote is not None:
+                        items.append(quote)
+                except Exception:
+                    continue
+            try:
+                rows = _records(akshare.futures_global_spot_em())
+                items.extend(_commodities_from_global_futures(rows))
+            except Exception:
+                pass
+        if not items:
+            raise RuntimeError("commodity sources returned no rows")
+        return items[:6]
+
+    def _fetch_dragon_tiger_sync(self) -> list[DragonTigerItem]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("dragon_tiger", timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS)
+            return [DragonTigerItem.model_validate(item) for item in payload]
+        today = datetime.now(UTC).date()
+        start_date = (today - timedelta(days=10)).strftime("%Y%m%d")
+        end_date = today.strftime("%Y%m%d")
+        with _without_proxy_env():
+            rows = _records(self._akshare().stock_lhb_detail_em(start_date=start_date, end_date=end_date))
+        items = [_dragon_tiger_item_from_row(row) for row in rows]
+        items = [item for item in items if item is not None]
+        if not items:
+            raise RuntimeError("dragon tiger source returned no rows")
+        latest_date = max(item.trade_date for item in items)
+        latest_items = [item for item in items if item.trade_date == latest_date]
+        return sorted(latest_items, key=lambda item: item.net_amount, reverse=True)[:10]
+
+    async def _dashboard_index_sparklines(
+        self,
+        markets: list[MarketOverviewItem],
+    ) -> tuple[dict[str, list[float]], DashboardSourceStatus]:
+        symbols = list(dict.fromkeys(quote.symbol for market in markets for quote in market.indices))
+        output: dict[str, list[float]] = {}
+        errors: list[str] = []
+
+        async def fetch_symbol(symbol: str) -> tuple[str, list[float] | None, str | None]:
+            try:
+                candles = await asyncio.wait_for(
+                    self._fetch_primary_candles(symbol, "daily", 24),
+                    timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+                )
+                closes = [round(candle.close, 4) for candle in candles[-18:] if candle.close > 0]
+                return symbol, closes or None, None
+            except Exception as exc:
+                detail = f"timed out after {DASHBOARD_SOURCE_TIMEOUT_SECONDS:g}s" if isinstance(exc, TimeoutError) else str(exc)
+                return symbol, None, detail
+
+        for symbol, closes, error in await asyncio.gather(*(fetch_symbol(symbol) for symbol in symbols)):
+            if closes:
+                output[symbol] = closes
+            elif error:
+                errors.append(f"{symbol}: {error}")
+
+        if output:
+            status = "live" if not errors else "stale"
+            return output, DashboardSourceStatus(
+                name="index_sparklines",
+                status=status,
+                source="market-candles",
+                detail="; ".join(errors[:3]),
+            )
+        return output, DashboardSourceStatus(
+            name="index_sparklines",
+            status="unavailable",
+            source="market-candles",
+            detail="; ".join(errors[:3]) or "no index sparkline data",
         )
 
     async def _fetch_primary_quote(self, symbol: str) -> QuoteSnapshot:
@@ -439,6 +686,9 @@ class MarketDataService:
         return self.akshare_module
 
     def _fetch_akshare_quote_sync(self, symbol: str) -> QuoteSnapshot:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("quote", symbol)
+            return QuoteSnapshot.model_validate(payload)
         with _without_proxy_env():
             akshare = self._akshare()
             market = infer_market(symbol)
@@ -481,6 +731,9 @@ class MarketDataService:
         return _records(akshare.stock_zh_a_spot_em())
 
     def _fetch_akshare_candles_sync(self, symbol: str, period: str, limit: int) -> list[CandleSnapshot]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("candles", symbol, period, str(limit))
+            return [CandleSnapshot.model_validate(item) for item in payload]
         with _without_proxy_env():
             akshare = self._akshare()
             market = infer_market(symbol)
@@ -534,6 +787,41 @@ class MarketDataService:
             end_date=end_date,
             adjust="",
         )
+
+    def _use_akshare_worker(self) -> bool:
+        return self.akshare_module is None and os.environ.get(AKSHARE_WORKER_ENV) != "1"
+
+    def _run_akshare_worker_sync(
+        self,
+        operation: str,
+        *args: str,
+        timeout_seconds: float = DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+    ) -> Any:
+        env = os.environ.copy()
+        env[AKSHARE_WORKER_ENV] = "1"
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            env.pop(key, None)
+        completed = subprocess.run(
+            [_worker_python_executable(), "-m", "app.services.akshare_worker", operation, *args],
+            cwd=_api_root_path(),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = _clean_worker_error(completed.stderr) or _clean_worker_error(completed.stdout)
+            raise RuntimeError(detail or f"akshare worker exited with code {completed.returncode}")
+        output = completed.stdout.strip()
+        if not output:
+            raise RuntimeError("akshare worker returned no output")
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"akshare worker returned invalid json: {exc}") from exc
 
     async def _fetch_yahoo_quote(self, symbol: str) -> QuoteSnapshot:
         data = await self._fetch_yahoo_chart(symbol, "1d", "5d")
@@ -672,6 +960,26 @@ def _sentiment_from_quotes(quotes: list[QuoteSnapshot], advances: int, declines:
     return round(max(0, min(100, quote_score * 0.6 + breadth_score * 0.4)), 2)
 
 
+def _api_root_path() -> str:
+    return str(Path(__file__).resolve().parents[2])
+
+
+def _worker_python_executable() -> str:
+    script_dir = "Scripts" if os.name == "nt" else "bin"
+    executable = "python.exe" if os.name == "nt" else "python"
+    venv_python = Path(sys.prefix) / script_dir / executable
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
+def _clean_worker_error(value: str) -> str:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return " ".join(lines[:4])[:800]
+
+
 def parse_cn_money(value: object) -> float:
     if value is None:
         return 0
@@ -772,6 +1080,133 @@ def _fund_flow_item_from_row(row: Mapping[str, object]) -> FundFlowItem:
     )
 
 
+def _news_items_from_rows(rows: list[Mapping[str, object]], source: str) -> list[MarketNewsItem]:
+    items: list[MarketNewsItem] = []
+    for row in rows:
+        title = _clean_text(_row_value(row, ("标题", "title")))
+        content = _clean_text(_row_value(row, ("内容", "摘要", "summary", "digest", "新闻内容")))
+        if not title and content:
+            title = content[:48]
+        if not title:
+            continue
+        items.append(
+            MarketNewsItem(
+                title=title,
+                content=content,
+                published_at=_parse_news_datetime(row),
+                source=source,
+                url=_clean_text(_row_value(row, ("链接", "url", "新闻链接"))),
+            )
+        )
+    return sorted(
+        items,
+        key=lambda item: item.published_at or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+
+
+def _commodity_from_sge_rows(
+    rows: list[Mapping[str, object]],
+    symbol: str,
+    name: str,
+    unit: str,
+) -> CommodityQuote | None:
+    values = [_safe_float(_row_value(row, ("现价", "price"))) for row in rows]
+    values = [value for value in values if value > 0]
+    if not values:
+        return None
+    first = values[0]
+    price = values[-1]
+    change = price - first
+    return CommodityQuote(
+        symbol=symbol,
+        name=name,
+        price=round(price, 4),
+        change=round(change, 4),
+        change_pct=round(change / first * 100, 4) if first else 0,
+        unit=unit,
+        source="sge-spot",
+        as_of=_parse_optional_datetime(_row_value(rows[-1], ("更新时间", "as_of"))) if rows else None,
+        sparkline=[round(value, 4) for value in values[-24:]],
+    )
+
+
+def _commodities_from_global_futures(rows: list[Mapping[str, object]]) -> list[CommodityQuote]:
+    wanted_names = ("黄金", "原油", "白银", "铜")
+    wanted_codes = {"GC00Y", "CL00Y", "SI00Y", "HG00Y"}
+    items: list[CommodityQuote] = []
+    for row in rows:
+        symbol = _clean_text(_row_value(row, ("代码", "symbol", "code")))
+        name = _clean_text(_row_value(row, ("名称", "name")))
+        if not symbol or not name:
+            continue
+        if symbol not in wanted_codes and not any(part in name for part in wanted_names):
+            continue
+        price = _safe_float(_row_value(row, ("最新价", "price", "现价")))
+        if price <= 0:
+            continue
+        items.append(
+            CommodityQuote(
+                symbol=symbol,
+                name=name,
+                price=round(price, 4),
+                change=round(_safe_float(_row_value(row, ("涨跌额", "change"))), 4),
+                change_pct=round(_safe_float(_row_value(row, ("涨跌幅", "change_pct"))), 4),
+                source="eastmoney-global-futures",
+                as_of=datetime.now(UTC),
+            )
+        )
+    return items[:4]
+
+
+def _dragon_tiger_item_from_row(row: Mapping[str, object]) -> DragonTigerItem | None:
+    symbol = _clean_text(_row_value(row, ("代码", "股票代码", "symbol")))
+    name = _clean_text(_row_value(row, ("名称", "股票名称", "name")))
+    trade_date = _date_only_text(_row_value(row, ("上榜日", "上榜日期", "trade_date")))
+    if not symbol or not name or not trade_date:
+        return None
+    return DragonTigerItem(
+        symbol=symbol,
+        name=name,
+        trade_date=trade_date,
+        close=_safe_float(_row_value(row, ("收盘价", "close"))),
+        change_pct=parse_pct(_row_value(row, ("涨跌幅", "change_pct"))),
+        net_amount=parse_cn_money(_row_value(row, ("龙虎榜净买额", "机构买入净额", "净额", "net_amount"))),
+        buy_amount=parse_cn_money(_row_value(row, ("龙虎榜买入额", "买入金额", "buy_amount"))),
+        sell_amount=parse_cn_money(_row_value(row, ("龙虎榜卖出额", "卖出金额", "sell_amount"))),
+        reason=_clean_text(_row_value(row, ("上榜原因", "解读", "reason"))),
+        source=LHB_SOURCE,
+    )
+
+
+def _parse_news_datetime(row: Mapping[str, object]) -> datetime | None:
+    published = _parse_optional_datetime(_row_value(row, ("发布时间", "showTime", "time", "rtime")))
+    if published is not None:
+        return published
+    date_text = _date_only_text(_row_value(row, ("发布日期", "日期", "date")))
+    time_text = _clean_text(_row_value(row, ("发布时间", "时间", "time")))
+    if date_text and time_text:
+        return _parse_optional_datetime(f"{date_text} {time_text}")
+    return None
+
+
+def _date_only_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    text = str(value).strip()
+    if not text:
+        return ""
+    if " " in text:
+        text = text.split(" ", 1)[0]
+    return text[:10]
+
+
+def _clean_text(value: object) -> str:
+    return str(value or "").strip()
+
+
 def _direction_for_pct(value: float) -> str:
     if value > 0:
         return "up"
@@ -783,8 +1218,17 @@ def _direction_for_pct(value: float) -> str:
 def _parse_optional_datetime(value: object) -> datetime | None:
     if value is None:
         return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     text = str(value).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, fmt).replace(tzinfo=UTC)
         except ValueError:

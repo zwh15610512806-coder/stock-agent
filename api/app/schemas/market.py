@@ -121,6 +121,39 @@ class FundFlowSummary(BaseModel):
     as_of: datetime | None = None
 
 
+class MarketNewsItem(BaseModel):
+    title: str
+    content: str = ""
+    published_at: datetime | None = None
+    source: str
+    url: str = ""
+
+
+class CommodityQuote(BaseModel):
+    symbol: str
+    name: str
+    price: float = 0
+    change: float = 0
+    change_pct: float = 0
+    unit: str = ""
+    source: str
+    as_of: datetime | None = None
+    sparkline: list[float] = []
+
+
+class DragonTigerItem(BaseModel):
+    symbol: str
+    name: str
+    trade_date: str
+    close: float = 0
+    change_pct: float = 0
+    net_amount: float = 0
+    buy_amount: float = 0
+    sell_amount: float = 0
+    reason: str = ""
+    source: str
+
+
 class MarketDashboardResponse(BaseModel):
     as_of: datetime
     cache_status: DashboardCacheStatus
@@ -133,4 +166,8 @@ class MarketDashboardResponse(BaseModel):
     industry_heatmap: list[DashboardHeatItem] = []
     concept_heatmap: list[DashboardHeatItem] = []
     region_heatmap: list[DashboardHeatItem] = []
+    market_news: list[MarketNewsItem] = []
+    commodity_quotes: list[CommodityQuote] = []
+    dragon_tiger: list[DragonTigerItem] = []
+    index_sparklines: dict[str, list[float]] = {}
     disclaimer: str

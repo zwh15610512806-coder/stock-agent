@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import {
   Activity,
   Bell,
@@ -10,7 +10,6 @@ import {
   CircleAlert,
   Database,
   FileText,
-  Gauge,
   Home,
   LineChart,
   LogOut,
@@ -23,7 +22,6 @@ import {
   UserRound,
 } from "lucide-react";
 import { AiPage } from "./pages/AiPage";
-import { MacroPage } from "./pages/MacroPage";
 import { MarketPage } from "./pages/MarketPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -32,7 +30,6 @@ import { A_SHARE_REFRESH_POLICY_LABEL } from "./lib/refresh-schedule";
 
 const navItems = [
   { to: "/", label: "市场总览", icon: Home, end: true },
-  { to: "/macro", label: "市场", icon: Gauge },
   { to: "/portfolio", label: "持仓", icon: BriefcaseBusiness },
   { to: "/stock", label: "个股", icon: LineChart },
   { to: "/ai", label: "研报", icon: FileText },
@@ -173,7 +170,7 @@ export function App() {
 
         <Routes>
           <Route path="/" element={<MarketPage />} />
-          <Route path="/macro" element={<MacroPage />} />
+          <Route path="/macro" element={<Navigate to="/" replace />} />
           <Route path="/stock" element={<StockPage />} />
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/ai" element={<AiPage />} />

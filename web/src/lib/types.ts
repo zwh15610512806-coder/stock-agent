@@ -108,6 +108,39 @@ export interface FundFlowSummary {
   as_of: string | null;
 }
 
+export interface MarketNewsItem {
+  title: string;
+  content: string;
+  published_at: string | null;
+  source: string;
+  url: string;
+}
+
+export interface CommodityQuote {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  change_pct: number;
+  unit: string;
+  source: string;
+  as_of: string | null;
+  sparkline: number[];
+}
+
+export interface DragonTigerItem {
+  symbol: string;
+  name: string;
+  trade_date: string;
+  close: number;
+  change_pct: number;
+  net_amount: number;
+  buy_amount: number;
+  sell_amount: number;
+  reason: string;
+  source: string;
+}
+
 export interface MarketDashboardResponse {
   as_of: string;
   cache_status: DashboardCacheStatus;
@@ -120,6 +153,10 @@ export interface MarketDashboardResponse {
   industry_heatmap: DashboardHeatItem[];
   concept_heatmap: DashboardHeatItem[];
   region_heatmap: DashboardHeatItem[];
+  market_news: MarketNewsItem[];
+  commodity_quotes: CommodityQuote[];
+  dragon_tiger: DragonTigerItem[];
+  index_sparklines: Record<string, number[]>;
   disclaimer: string;
 }
 
