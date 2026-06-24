@@ -2,6 +2,7 @@ import type {
   AiReportResponse,
   AiReportAnalysisSkill,
   CandleSnapshot,
+  EtfCandlesResponse,
   EtfSearchResponse,
   MacroDashboardResponse,
   MarketDashboardResponse,
@@ -67,7 +68,7 @@ export const api = {
   searchEtfs: (q = "", limit = 20) =>
     requestJson<EtfSearchResponse>(`/api/etfs/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   etfCandles: (symbol: string, period = "daily", limit = 120) =>
-    requestJson<CandleSnapshot[]>(
+    requestJson<EtfCandlesResponse>(
       `/api/etfs/candles?symbol=${encodeURIComponent(symbol)}&period=${period}&limit=${limit}`,
     ),
   analyzePortfolio: (positions: PortfolioPosition[]) =>

@@ -16,6 +16,8 @@ import type {
   AShareActivity,
   CommodityQuote,
   DragonTigerItem,
+  DashboardCacheStatus,
+  DashboardSourceStatus,
   FundFlowSummary,
   MarketNewsItem,
   QuoteSnapshot,
@@ -36,7 +38,9 @@ export function MarketPage() {
     ...(data?.concept_heatmap || []),
     ...(data?.region_heatmap || []),
   ];
-  const hasUnavailableSource = data?.source_status.some((status) => status.status === "unavailable");
+  const sourceWarning = isInitialLoading
+    ? ""
+    : marketSourceWarning(dashboard.isError, data?.cache_status, data?.source_status || []);
 
   return (
     <div className="market-overview-board">
@@ -63,9 +67,7 @@ export function MarketPage() {
         </div>
       ) : null}
 
-      {!isInitialLoading && (dashboard.isError || hasUnavailableSource) ? (
-        <div className="source-warning">数据源暂不可用；页面仅展示其它真实来源或 SQLite 最近缓存。</div>
-      ) : null}
+      {sourceWarning ? <div className="source-warning">{sourceWarning}</div> : null}
 
       <section className="market-block">
         <SectionTitle icon={BarChart3} title="全球指数" subtitle="A股、港股、美股核心指数与短线轨迹" />
@@ -354,6 +356,26 @@ function MarketLoading({ title, compact = false }: { title: string; compact?: bo
       <span>正在连接免费行情源和本地 SQLite 缓存。</span>
     </div>
   );
+}
+
+function marketSourceWarning(
+  isError: boolean,
+  cacheStatus?: DashboardCacheStatus,
+  statuses: DashboardSourceStatus[] = [],
+): string {
+  if (isError) {
+    return "后端 API 暂不可用；请确认 FastAPI 已在 8000 端口运行。";
+  }
+  if (cacheStatus === "unavailable") {
+    return "当前没有可用真实来源或 SQLite 缓存；请确认后端服务、网络连接和免费源状态。";
+  }
+  if (cacheStatus === "stale") {
+    return "部分免费数据源超时，页面正在展示可用真实来源和 SQLite 最近缓存。";
+  }
+  if (cacheStatus === "partial" || statuses.some((status) => status.status === "unavailable")) {
+    return "部分免费数据源暂不可用，页面已保留可用真实来源，不展示模拟数据。";
+  }
+  return "";
 }
 
 function formatTrillion(value: number): string {

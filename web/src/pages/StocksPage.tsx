@@ -6,7 +6,14 @@ import { EmptyState } from "../components/EmptyState";
 import { MetricCard } from "../components/MetricCard";
 import { api } from "../lib/api";
 import { formatCompact, formatNumber, toneForPct } from "../lib/format";
-import type { MarketCode, StockScreenerItem, StockScreenerResponse, SymbolSearchResult } from "../lib/types";
+import type {
+  CandleSnapshot,
+  EtfCandleSnapshot,
+  MarketCode,
+  StockScreenerItem,
+  StockScreenerResponse,
+  SymbolSearchResult,
+} from "../lib/types";
 
 type StocksTab = "workbench" | "selector" | "etf";
 
@@ -261,6 +268,7 @@ function EtfPanel() {
     queryFn: () => api.etfCandles(symbol, "daily", 120),
     enabled: symbol.length > 0,
   });
+  const chartCandles = (candles.data?.items || []).map((item) => toChartCandle(item, candles.data?.source || "akshare-etf"));
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -306,8 +314,26 @@ function EtfPanel() {
       {etfs.isError ? <EmptyState title="ETF 数据源不可用" body="免费 ETF 源暂时无法返回真实数据。" /> : null}
       {!etfs.isPending && !etfs.data?.items.length ? <EmptyState title="暂无匹配 ETF" body="调整关键词后重新搜索。" /> : null}
       <div className="stocks-etf-chart">
-        {candles.data?.length ? <CandleChart candles={candles.data} /> : <div className="chart-skeleton" />}
+        {candles.isPending && symbol ? <div className="chart-skeleton" /> : null}
+        {!candles.isPending && chartCandles.length ? <CandleChart candles={chartCandles} /> : null}
+        {!candles.isPending && symbol && !chartCandles.length ? (
+          <EmptyState title="ETF K 线暂不可用" body={candles.data?.detail || "免费 ETF 历史源暂时无法返回真实数据。"} />
+        ) : null}
       </div>
     </section>
   );
+}
+
+function toChartCandle(item: EtfCandleSnapshot, source: string): CandleSnapshot {
+  return {
+    symbol: item.symbol,
+    date: item.date,
+    open: item.open,
+    high: item.high,
+    low: item.low,
+    close: item.close,
+    volume: item.volume || 0,
+    source: item.source || source,
+    delay_label: source,
+  };
 }

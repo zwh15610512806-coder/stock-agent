@@ -236,6 +236,26 @@ export interface EtfSearchResponse {
   detail?: string;
 }
 
+export interface EtfCandleSnapshot {
+  symbol: string;
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number | null;
+  turnover?: number | null;
+  source: string;
+}
+
+export interface EtfCandlesResponse {
+  items: EtfCandleSnapshot[];
+  source: string;
+  as_of: string | null;
+  status: DashboardSourceState;
+  detail?: string;
+}
+
 export interface PortfolioPosition {
   symbol: string;
   name: string;

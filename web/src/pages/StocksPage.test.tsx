@@ -2,7 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
-import type { CandleSnapshot, EtfSearchResponse, QuoteSnapshot, StockScreenerResponse, SymbolSearchResult } from "../lib/types";
+import type {
+  CandleSnapshot,
+  EtfCandlesResponse,
+  EtfSearchResponse,
+  QuoteSnapshot,
+  StockScreenerResponse,
+  SymbolSearchResult,
+} from "../lib/types";
 import { StocksPage } from "./StocksPage";
 
 vi.mock("../lib/api", () => ({
@@ -90,6 +97,25 @@ const etfResponse: EtfSearchResponse = {
   ],
 };
 
+const etfCandlesResponse: EtfCandlesResponse = {
+  as_of: "2026-06-24T09:30:00Z",
+  source: "akshare-eastmoney-etf-history",
+  status: "live",
+  items: [
+    {
+      symbol: "510300",
+      date: "2026-06-23",
+      open: 4.05,
+      high: 4.16,
+      low: 4.02,
+      close: 4.12,
+      volume: 1200,
+      turnover: 4944,
+      source: "akshare-eastmoney-etf-history",
+    },
+  ],
+};
+
 function renderStocksPage() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -111,7 +137,7 @@ describe("StocksPage center", () => {
     vi.mocked(api.searchSymbols).mockResolvedValue(searchResults);
     vi.mocked(api.stockScreener).mockResolvedValue(screenerResponse);
     vi.mocked(api.searchEtfs).mockResolvedValue(etfResponse);
-    vi.mocked(api.etfCandles).mockResolvedValue(candles);
+    vi.mocked(api.etfCandles).mockResolvedValue(etfCandlesResponse);
 
     renderStocksPage();
 

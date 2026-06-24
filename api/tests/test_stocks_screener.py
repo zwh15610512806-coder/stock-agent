@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 from app.routers.stocks import router
 from app.services.stocks import StockScreenerService
@@ -75,6 +76,28 @@ class ScreenerAkShare:
         )
 
 
+class FailingScreenerAkShare:
+    def stock_zh_a_spot_em(self) -> FakeTable:
+        raise RuntimeError("eastmoney disconnected")
+
+    def stock_info_a_code_name(self) -> FakeTable:
+        return FakeTable([{"code": "600519", "name": "贵州茅台"}])
+
+
+class QuoteFallbackService:
+    async def quote(self, symbol: str) -> SimpleNamespace:
+        assert symbol == "600519.SH"
+        return SimpleNamespace(
+            symbol=symbol,
+            price=1520.5,
+            change_pct=0.82,
+            turnover=987654321,
+            volume=123456,
+            source="tencent-free-delayed",
+            as_of="2026-06-24T15:00:00Z",
+        )
+
+
 async def test_screener_filters_a_share_rows_from_one_spot_table() -> None:
     fake_akshare = ScreenerAkShare()
     service = StockScreenerService(akshare_module=fake_akshare)
@@ -97,6 +120,25 @@ async def test_screener_filters_a_share_rows_from_one_spot_table() -> None:
     assert response.items[0].pe == 9.5
     assert response.items[0].pb == 0.9
     assert fake_akshare.calls == 1
+
+
+async def test_screener_falls_back_to_symbol_pool_and_quotes_for_keyword_query() -> None:
+    service = StockScreenerService(
+        akshare_module=FailingScreenerAkShare(),
+        market_service=QuoteFallbackService(),
+    )
+
+    response = await service.screen(query="茅台", limit=5)
+
+    assert response.status == "live"
+    assert response.source == "symbol-pool+tencent-free-delayed"
+    assert "eastmoney disconnected" in response.detail
+    assert len(response.items) == 1
+    assert response.items[0].symbol == "600519.SH"
+    assert response.items[0].name == "贵州茅台"
+    assert response.items[0].price == 1520.5
+    assert response.items[0].change_pct == 0.82
+    assert response.items[0].pe is None
 
 
 def test_screener_endpoint_returns_contract_without_main_registration() -> None:

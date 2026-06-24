@@ -196,6 +196,8 @@ describe("MarketPage dashboard", () => {
     expect(screen.getByText("黄金连续")).toBeTruthy();
     expect(screen.getByText("蓝黛科技")).toBeTruthy();
     expect(screen.getAllByText(/缓存/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/部分免费数据源超时/)).toBeTruthy();
+    expect(screen.queryByText(/数据源暂不可用/)).toBeNull();
     expect(screen.queryByText("大盘趋势")).toBeNull();
     expect(screen.queryByText("市场情绪")).toBeNull();
   });
@@ -220,7 +222,7 @@ describe("MarketPage dashboard", () => {
 
     renderMarketPage();
 
-    expect(await screen.findByText(/数据源暂不可用/)).toBeTruthy();
+    expect(await screen.findByText(/部分免费数据源暂不可用/)).toBeTruthy();
     expect(screen.getByText("暂无真实快讯")).toBeTruthy();
     expect(screen.getByText("暂无真实商品行情")).toBeTruthy();
     expect(screen.getByText("暂无真实龙虎榜")).toBeTruthy();

@@ -60,6 +60,25 @@ class FailingETFAkShare:
         raise RuntimeError("hist source down")
 
 
+class SinaFallbackETFAkShare:
+    def __init__(self) -> None:
+        self.sina_calls: list[str] = []
+
+    def fund_etf_spot_em(self) -> FakeTable:
+        return FakeTable([])
+
+    def fund_etf_hist_em(self, symbol: str, period: str = "daily", adjust: str = "") -> FakeTable:
+        raise RuntimeError("eastmoney hist disconnected")
+
+    def fund_etf_hist_sina(self, symbol: str) -> FakeTable:
+        self.sina_calls.append(symbol)
+        return FakeTable(
+            [
+                {"date": "2026-06-23", "open": 5.08, "high": 5.1, "low": 4.91, "close": 4.94, "volume": 1000, "amount": 4940},
+            ]
+        )
+
+
 async def test_etf_search_returns_live_items_from_spot_table() -> None:
     fake_akshare = ETFAkShare()
     service = ETFService(akshare_module=fake_akshare)
@@ -100,6 +119,20 @@ async def test_etf_source_failure_returns_empty_unavailable_without_sample_data(
     assert candle_response.status == "unavailable"
     assert candle_response.items == []
     assert "hist source down" in candle_response.detail
+
+
+async def test_etf_candles_fall_back_to_sina_daily_history() -> None:
+    fake_akshare = SinaFallbackETFAkShare()
+    service = ETFService(akshare_module=fake_akshare)
+
+    response = await service.candles("510300", period="daily", limit=5)
+
+    assert response.status == "live"
+    assert response.source == "akshare-sina-etf-history"
+    assert fake_akshare.sina_calls == ["sh510300"]
+    assert response.items[0].source == "akshare-sina-etf-history"
+    assert response.items[0].close == 4.94
+    assert response.items[0].turnover == 4940
 
 
 def test_etf_endpoints_return_contract_without_main_registration() -> None:

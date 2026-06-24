@@ -10,6 +10,7 @@ from app.schemas.etfs import ETFCandleItem, ETFCandlesResponse, ETFQuoteItem, ET
 
 ETF_SPOT_SOURCE = "akshare-eastmoney-etf-spot"
 ETF_HISTORY_SOURCE = "akshare-eastmoney-etf-history"
+ETF_HISTORY_SINA_SOURCE = "akshare-sina-etf-history"
 
 
 class ETFService:
@@ -59,24 +60,38 @@ class ETFService:
         normalized_symbol = _normalize_etf_symbol(symbol)
         normalized_period = period if period in {"daily", "weekly", "monthly"} else "daily"
         normalized_limit = max(1, min(limit, 500))
+        history_source = ETF_HISTORY_SOURCE
         try:
             akshare = self._akshare()
             with _without_proxy_env():
                 rows = _records(_fund_etf_hist(akshare, normalized_symbol, normalized_period))
         except Exception as exc:
-            return ETFCandlesResponse(
-                items=[],
-                source=ETF_HISTORY_SOURCE,
-                as_of=None,
-                status="unavailable",
-                detail=str(exc),
-            )
+            if normalized_period != "daily":
+                return ETFCandlesResponse(
+                    items=[],
+                    source=ETF_HISTORY_SOURCE,
+                    as_of=None,
+                    status="unavailable",
+                    detail=str(exc),
+                )
+            try:
+                with _without_proxy_env():
+                    rows = _records(_fund_etf_hist_sina(akshare, normalized_symbol))
+                history_source = ETF_HISTORY_SINA_SOURCE
+            except Exception as fallback_exc:
+                return ETFCandlesResponse(
+                    items=[],
+                    source=ETF_HISTORY_SOURCE,
+                    as_of=None,
+                    status="unavailable",
+                    detail=f"{exc}; sina fallback failed: {fallback_exc}",
+                )
 
-        candles = [_etf_candle_from_row(row, normalized_symbol) for row in rows]
+        candles = [_etf_candle_from_row(row, normalized_symbol, history_source) for row in rows]
         parsed = sorted([item for item in candles if item is not None], key=lambda item: item.date)
         return ETFCandlesResponse(
             items=parsed[-normalized_limit:],
-            source=ETF_HISTORY_SOURCE,
+            source=history_source,
             as_of=datetime.now(UTC),
             status="live",
         )
@@ -92,6 +107,10 @@ def _fund_etf_hist(akshare: object, symbol: str, period: str) -> object:
         return akshare.fund_etf_hist_em(symbol=symbol, period=period, adjust="")
     except TypeError:
         return akshare.fund_etf_hist_em(symbol=symbol, period=period)
+
+
+def _fund_etf_hist_sina(akshare: object, symbol: str) -> object:
+    return akshare.fund_etf_hist_sina(symbol=_sina_etf_symbol(symbol))
 
 
 def _etf_quote_from_row(row: Mapping[str, object]) -> ETFQuoteItem | None:
@@ -110,7 +129,7 @@ def _etf_quote_from_row(row: Mapping[str, object]) -> ETFQuoteItem | None:
     )
 
 
-def _etf_candle_from_row(row: Mapping[str, object], symbol: str) -> ETFCandleItem | None:
+def _etf_candle_from_row(row: Mapping[str, object], symbol: str, source: str) -> ETFCandleItem | None:
     date_value = _clean_text(_row_value(row, ("日期", "date", "时间")))
     open_value = _parse_float(_row_value(row, ("开盘", "open")))
     high_value = _parse_float(_row_value(row, ("最高", "high")))
@@ -127,7 +146,7 @@ def _etf_candle_from_row(row: Mapping[str, object], symbol: str) -> ETFCandleIte
         close=close_value,
         volume=_parse_float(_row_value(row, ("成交量", "volume"))),
         turnover=_parse_money(_row_value(row, ("成交额", "turnover", "amount"))),
-        source=ETF_HISTORY_SOURCE,
+        source=source,
     )
 
 
@@ -140,6 +159,12 @@ def _normalize_etf_symbol(symbol: str) -> str:
             raw = raw[len(prefix):]
             break
     return raw
+
+
+def _sina_etf_symbol(symbol: str) -> str:
+    normalized = _normalize_etf_symbol(symbol)
+    prefix = "sh" if normalized.startswith("5") else "sz"
+    return f"{prefix}{normalized}"
 
 
 def _parse_money(value: object) -> float | None:

@@ -7,14 +7,18 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from app.schemas.stocks import StockScreenerItem, StockScreenerResponse
-from app.services.symbols import normalize_symbol
+from app.services.market import MarketDataService
+from app.services.symbols import normalize_symbol, search_static_symbols
 
 STOCK_SCREENER_SOURCE = "akshare-eastmoney-a-share-spot"
+STOCK_SCREENER_FALLBACK_SOURCE = "symbol-pool+tencent-free-delayed"
+STOCK_SCREENER_TIMEOUT_SECONDS = 8.0
 
 
 class StockScreenerService:
-    def __init__(self, akshare_module: object | None = None) -> None:
+    def __init__(self, akshare_module: object | None = None, market_service: object | None = None) -> None:
         self.akshare_module = akshare_module
+        self.market_service = market_service or MarketDataService()
 
     async def screen(
         self,
@@ -27,17 +31,44 @@ class StockScreenerService:
         max_pb: float | None = None,
         limit: int = 50,
     ) -> StockScreenerResponse:
-        return await asyncio.to_thread(
-            self._screen_sync,
-            query,
-            min_change_pct,
-            max_change_pct,
-            min_turnover,
-            min_market_cap,
-            max_pe,
-            max_pb,
-            limit,
-        )
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._screen_sync,
+                    query,
+                    min_change_pct,
+                    max_change_pct,
+                    min_turnover,
+                    min_market_cap,
+                    max_pe,
+                    max_pb,
+                    limit,
+                ),
+                timeout=STOCK_SCREENER_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            response = StockScreenerResponse(
+                items=[],
+                source=STOCK_SCREENER_SOURCE,
+                as_of=None,
+                status="unavailable",
+                detail=f"primary screener timed out after {STOCK_SCREENER_TIMEOUT_SECONDS:g}s",
+            )
+        if response.status == "unavailable":
+            fallback = await self._fallback_keyword_screen(
+                query=query,
+                min_change_pct=min_change_pct,
+                max_change_pct=max_change_pct,
+                min_turnover=min_turnover,
+                min_market_cap=min_market_cap,
+                max_pe=max_pe,
+                max_pb=max_pb,
+                limit=limit,
+                failure_detail=response.detail,
+            )
+            if fallback.items:
+                return fallback
+        return response
 
     def _screen_sync(
         self,
@@ -99,6 +130,74 @@ class StockScreenerService:
         if self.akshare_module is not None:
             return self.akshare_module
         return importlib.import_module("akshare")
+
+    async def _fallback_keyword_screen(
+        self,
+        query: str,
+        min_change_pct: float | None,
+        max_change_pct: float | None,
+        min_turnover: float | None,
+        min_market_cap: float | None,
+        max_pe: float | None,
+        max_pb: float | None,
+        limit: int,
+        failure_detail: str,
+    ) -> StockScreenerResponse:
+        if not query.strip():
+            return StockScreenerResponse(
+                items=[],
+                source=STOCK_SCREENER_FALLBACK_SOURCE,
+                as_of=None,
+                status="unavailable",
+                detail=failure_detail,
+            )
+        candidates = search_static_symbols(query, {"CN"}, akshare_module=self.akshare_module)[: max(1, min(limit, 30))]
+        items: list[StockScreenerItem] = []
+        as_of: datetime | None = None
+        for candidate in candidates:
+            try:
+                quote = await self.market_service.quote(candidate.symbol)
+            except Exception:
+                continue
+            if str(getattr(quote, "source", "")).strip().lower() == "sample fallback":
+                continue
+            item = StockScreenerItem(
+                symbol=candidate.symbol,
+                code=_plain_code(candidate.symbol),
+                name=candidate.name,
+                exchange=candidate.exchange or _exchange_for_symbol(candidate.symbol),
+                price=getattr(quote, "price", None),
+                change_pct=getattr(quote, "change_pct", None),
+                turnover=getattr(quote, "turnover", None),
+                volume=getattr(quote, "volume", None),
+                market_cap=None,
+                pe=None,
+                pb=None,
+                source=str(getattr(quote, "source", STOCK_SCREENER_FALLBACK_SOURCE)) or STOCK_SCREENER_FALLBACK_SOURCE,
+            )
+            if not _passes_min(item.change_pct, min_change_pct):
+                continue
+            if not _passes_max(item.change_pct, max_change_pct):
+                continue
+            if not _passes_min(item.turnover, min_turnover):
+                continue
+            if not _passes_min(item.market_cap, min_market_cap):
+                continue
+            if not _passes_max(item.pe, max_pe):
+                continue
+            if not _passes_max(item.pb, max_pb):
+                continue
+            quote_as_of = getattr(quote, "as_of", None)
+            if isinstance(quote_as_of, datetime):
+                as_of = quote_as_of
+            items.append(item)
+        return StockScreenerResponse(
+            items=items,
+            source=STOCK_SCREENER_FALLBACK_SOURCE,
+            as_of=as_of or datetime.now(UTC),
+            status="live" if items else "unavailable",
+            detail=f"Primary screener source unavailable: {failure_detail}",
+        )
 
 
 def _stock_item_from_row(row: Mapping[str, object]) -> StockScreenerItem | None:
