@@ -28,6 +28,7 @@ npm run dev
 ```
 
 打开 `http://127.0.0.1:5173`。前端默认访问同域 `/api`，本地联调可在 `web/.env.local` 或环境变量里设置 `VITE_API_BASE=http://127.0.0.1:8000`。
+如果页面显示“后端未连接”，先确认 `GET http://127.0.0.1:8000/healthz` 返回 `{"status":"ok"}`；如果 healthz 正常但页面显示“数据源不可用”，再看 `/api/sources/status` 和各板块的 `source_status`。
 
 ## 环境变量
 
@@ -68,8 +69,27 @@ npm run dev
 - `GET /api/etfs/candles`
 - `POST /api/portfolio/analyze`
 - `POST /api/ocr/positions`
-- `POST /api/ai/portfolio-report`
+- `POST /api/ai/reports`
 - `GET /api/sources/status`
+
+DangInvest 风格兼容包装接口：
+- `GET /api/quotes?type=realtime&group=indices-cn`
+- `GET /api/pricing/historical?market=CN&date=2025-08-12`
+- `GET /api/time-machine/resolve?date=2025-08-12`
+- `GET /api/market/status`
+- `GET /api/market/dashboard/realtime`
+- `GET /api/market/dashboard/intraday`
+- `GET /api/market/macro-timeseries`
+- `GET /api/market/macro-xray`
+- `GET /api/stocks/v2/catalog`
+- `GET /api/stocks/v2/search`
+- `GET /api/stocks/v2/screener/query`
+- `GET /api/stocks/v2/compare/query`
+- `GET /api/quotes/v2/overlay`
+- `GET /api/quotes/v2/stock-latest/snapshot`
+- `GET /api/quotes/v2/stock-latest/stats`
+- `GET /api/quotes/v2/stock-latest/ranking`
+- `GET /api/etfs/v1/catalog`
 
 ## Docker
 

@@ -11,6 +11,7 @@ vi.mock("../lib/api", () => ({
     analyzePortfolio: vi.fn(),
     uploadOcr: vi.fn(),
   },
+  apiFailureMessage: (_error: unknown, label: string) => `${label}暂不可用`,
 }));
 
 const emptyAnalysis: PortfolioAnalysis = {
@@ -73,7 +74,7 @@ describe("PortfolioPage OCR upload", () => {
     const { container } = renderPortfolioPage();
     uploadScreenshot(container);
 
-    expect(await screen.findByText("OCR 上传失败，请检查后端服务或网络连接。")).toBeTruthy();
+    expect(await screen.findByText("OCR 识别暂不可用")).toBeTruthy();
   });
 
   it("shows a visible import result when OCR returns positions", async () => {
@@ -115,5 +116,14 @@ describe("PortfolioPage OCR upload", () => {
 
     expect(await screen.findByText("600519.SH 行情不可用，已保留本地现价。")).toBeTruthy();
     expect(screen.getByText(/sample fallback rejected/)).toBeTruthy();
+  });
+
+  it("shows a visible backend error when portfolio analysis fails", async () => {
+    vi.mocked(api.analyzePortfolio).mockRejectedValue(new Error("offline"));
+    usePortfolioStore.setState({ positions: [parsedPosition] });
+
+    renderPortfolioPage();
+
+    expect(await screen.findByText("持仓分析暂不可用")).toBeTruthy();
   });
 });

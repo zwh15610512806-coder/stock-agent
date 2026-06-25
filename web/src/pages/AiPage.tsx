@@ -13,14 +13,14 @@ export function AiPage() {
   const [analysisSkill, setAnalysisSkill] = useState<AiReportAnalysisSkill>("standard");
   const reportMutation = useMutation({
     mutationFn: async () => {
-      const [quote] = await api.quotes([symbol]);
-      const candles = await api.candles(symbol, "daily", 120);
+      const quoteResponse = await api.compatQuotes([symbol]);
+      const candleResponse = await api.compatDailySeries([symbol], 120);
       return api.createAiReport({
         symbol,
         market,
         analysis_skill: analysisSkill,
-        quote,
-        candles,
+        quote: quoteResponse.items[0] || null,
+        candles: candleResponse.series[0]?.items || [],
         portfolio_positions: positions,
         horizon: "中短线波段",
         risk_profile: "稳健",

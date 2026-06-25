@@ -9,6 +9,7 @@ vi.mock("../lib/api", () => ({
   api: {
     macroDashboard: vi.fn(),
   },
+  apiFailureMessage: (_error: unknown, label: string) => `${label}暂不可用`,
 }));
 
 const macroDashboard: MacroDashboardResponse = {

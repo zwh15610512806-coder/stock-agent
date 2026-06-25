@@ -199,10 +199,10 @@ export interface MacroDashboardResponse {
 export interface StockScreenerItem {
   symbol: string;
   name: string;
-  price: number;
-  change_pct: number;
-  turnover: number;
-  volume?: number;
+  price: number | null;
+  change_pct: number | null;
+  turnover: number | null;
+  volume?: number | null;
   pe?: number | null;
   pb?: number | null;
   market_cap?: number | null;
@@ -220,10 +220,10 @@ export interface StockScreenerResponse {
 export interface EtfSnapshot {
   symbol: string;
   name: string;
-  price: number;
-  change_pct: number;
-  volume: number;
-  turnover: number;
+  price: number | null;
+  change_pct: number | null;
+  volume: number | null;
+  turnover: number | null;
   source: string;
   as_of?: string | null;
 }
@@ -253,6 +253,32 @@ export interface EtfCandlesResponse {
   source: string;
   as_of: string | null;
   status: DashboardSourceState;
+  detail?: string;
+}
+
+export interface CompatQuotesResponse {
+  type: string;
+  group: string;
+  status: DashboardCacheStatus;
+  source: string;
+  as_of: string;
+  items: QuoteSnapshot[];
+  detail?: string;
+}
+
+export interface CompatQuoteSeriesItem {
+  symbol: string;
+  items: CandleSnapshot[];
+  source: string;
+}
+
+export interface CompatQuoteSeriesResponse {
+  type: string;
+  group: string;
+  status: DashboardCacheStatus;
+  source: string;
+  as_of: string;
+  series: CompatQuoteSeriesItem[];
   detail?: string;
 }
 
@@ -299,6 +325,40 @@ export interface PortfolioAnalysis {
   }>;
   data_warnings?: string[];
   disclaimer: string;
+}
+
+export interface SourceKeyStatus {
+  name: string;
+  configured: boolean;
+  detail: string;
+}
+
+export interface SourceCacheStatus {
+  path: string;
+  exists: boolean;
+  writable: boolean;
+  detail: string;
+}
+
+export interface FreeDataSource {
+  name: string;
+  category: string;
+  source: string;
+  detail: string;
+}
+
+export interface SourcesStatusResponse {
+  key_status: SourceKeyStatus[];
+  cache: SourceCacheStatus;
+  free_data_sources: FreeDataSource[];
+  disclaimer: string;
+}
+
+export interface OcrPositionsResponse {
+  status: string;
+  positions: PortfolioPosition[];
+  message: string;
+  raw_lines?: string[];
 }
 
 export interface AiReportResponse {

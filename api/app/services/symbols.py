@@ -26,7 +26,7 @@ STATIC_SYMBOLS: list[SymbolSearchResult] = [
 
 A_SHARE_POOL_SOURCE = "akshare-stock-info-a-code-name"
 A_SHARE_POOL_TTL_SECONDS = 6 * 60 * 60
-_A_SHARE_POOL_CACHE: dict[int, tuple[float, list[SymbolSearchResult]]] = {}
+_A_SHARE_POOL_CACHE: dict[tuple[int, str], tuple[float, list[SymbolSearchResult]]] = {}
 
 
 def normalize_symbol(value: str, market: MarketCode | None = None) -> str:
@@ -135,7 +135,7 @@ def _a_share_pool(akshare_module: object | None = None) -> list[SymbolSearchResu
     module = akshare_module or _import_akshare()
     if module is None:
         return []
-    cache_key = id(module)
+    cache_key = _a_share_pool_cache_key(module)
     cached = _A_SHARE_POOL_CACHE.get(cache_key)
     if cached and time.time() - cached[0] < A_SHARE_POOL_TTL_SECONDS:
         return cached[1]
@@ -173,6 +173,11 @@ def _import_akshare() -> object | None:
         return importlib.import_module("akshare")
     except Exception:
         return None
+
+
+def _a_share_pool_cache_key(module: object) -> tuple[int, str]:
+    module_type = type(module)
+    return id(module), f"{module_type.__module__}.{module_type.__qualname__}"
 
 
 def _normalize_a_share_pool_code(code: str) -> str:

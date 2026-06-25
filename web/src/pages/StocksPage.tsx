@@ -4,7 +4,7 @@ import { BarChart3, Briefcase, Filter, PackageOpen, Search, Star } from "lucide-
 import { CandleChart } from "../components/CandleChart";
 import { EmptyState } from "../components/EmptyState";
 import { MetricCard } from "../components/MetricCard";
-import { api } from "../lib/api";
+import { api, apiFailureMessage } from "../lib/api";
 import { formatCompact, formatNumber, toneForPct } from "../lib/format";
 import type {
   CandleSnapshot,
@@ -65,13 +65,13 @@ function WorkbenchPanel() {
 
   const quoteQuery = useQuery({
     queryKey: ["stocks-center-quote", querySymbol],
-    queryFn: async () => (await api.quotes([querySymbol]))[0],
+    queryFn: () => api.compatQuotes([querySymbol]),
     enabled: querySymbol.length > 0,
   });
 
   const candles = useQuery({
     queryKey: ["stocks-center-candles", querySymbol],
-    queryFn: () => api.candles(querySymbol, "daily", 120),
+    queryFn: () => api.compatDailySeries([querySymbol], 120),
     enabled: querySymbol.length > 0,
   });
 
@@ -83,7 +83,8 @@ function WorkbenchPanel() {
     }
   }
 
-  const quote = quoteQuery.data;
+  const quote = quoteQuery.data?.items[0];
+  const chartCandles = candles.data?.series[0]?.items || [];
 
   return (
     <>
@@ -112,32 +113,40 @@ function WorkbenchPanel() {
         </form>
       </section>
 
-      {quoteQuery.isError ? <EmptyState title="股票加载失败" body="检查代码格式或后端 API 状态。" /> : null}
+      {quoteQuery.isError ? <EmptyState title="股票加载失败" body={apiFailureMessage(quoteQuery.error, "股票报价")} /> : null}
+      {!quoteQuery.isPending && !quoteQuery.isError && quoteQuery.data?.status === "unavailable" ? (
+        <EmptyState title="股票报价暂不可用" body={quoteQuery.data.detail || "免费行情源暂时无法返回真实报价。"} />
+      ) : null}
 
       <div className="metric-grid">
-        <MetricCard label={quote?.name || querySymbol} value={formatNumber(quote?.price || 0)} detail={quote?.symbol || "等待报价"} />
+        <MetricCard label={quote?.name || querySymbol} value={formatOptionalNumber(quote?.price)} detail={quote?.symbol || "等待报价"} />
         <MetricCard
           label="涨跌幅"
-          value={`${formatNumber(quote?.change_pct || 0)}%`}
+          value={formatOptionalPct(quote?.change_pct)}
           detail={quote?.delay_label || "等待行情源"}
-          tone={toneForPct(quote?.change_pct || 0)}
+          tone={toneForPct(quote?.change_pct ?? 0)}
         />
-        <MetricCard label="成交量" value={formatCompact(quote?.volume || 0)} detail={quote?.source || "真实数据源"} />
-        <MetricCard label="成交额估算" value={formatCompact(quote?.turnover || 0)} detail={quote?.currency || market} />
+        <MetricCard label="成交量" value={formatOptionalCompact(quote?.volume)} detail={quote?.source || "真实数据源"} />
+        <MetricCard label="成交额估算" value={formatOptionalCompact(quote?.turnover)} detail={quote?.currency || market} />
       </div>
 
       <section className="data-panel stocks-selector-panel">
         <div className="panel-head">
           <div>
             <h3>{quote?.name || querySymbol} K线</h3>
-            <span>{candles.data?.[0]?.delay_label || "加载中"}</span>
+            <span>{chartCandles[0]?.delay_label || candles.data?.detail || "加载中"}</span>
           </div>
           <button className="terminal-button soft" type="button">
             <Star size={15} />
             加入自选
           </button>
         </div>
-        {candles.data?.length ? <CandleChart candles={candles.data} /> : <div className="chart-skeleton" />}
+        {candles.isError ? <EmptyState title="K 线加载失败" body={apiFailureMessage(candles.error, "股票 K 线")} /> : null}
+        {!candles.isPending && !candles.isError && candles.data?.status === "unavailable" ? (
+          <EmptyState title="K 线暂不可用" body={candles.data.detail || "免费历史行情源暂时无法返回真实 K 线。"} />
+        ) : null}
+        {!candles.isPending && !candles.isError && chartCandles.length ? <CandleChart candles={chartCandles} /> : null}
+        {candles.isPending ? <div className="chart-skeleton" /> : null}
       </section>
     </>
   );
@@ -208,7 +217,19 @@ function SelectorPanel() {
           ))}
         </div>
       )}
+      {screener.isError ? <EmptyState title="选股器加载失败" body={apiFailureMessage(screener.error, "选股器")} /> : null}
+      {market === "CN" &&
+      !screener.isPending &&
+      !screener.isError &&
+      (screener.data as { status?: string; detail?: string } | undefined)?.status === "unavailable" ? (
+        <EmptyState
+          title="选股器数据源不可用"
+          body={(screener.data as { detail?: string } | undefined)?.detail || "免费 A 股筛选源暂时不可用，页面不会展示模拟数据。"}
+        />
+      ) : null}
       {!screener.isPending &&
+      !screener.isError &&
+      (market !== "CN" || (screener.data as { status?: string } | undefined)?.status !== "unavailable") &&
       (market === "CN"
         ? !((screener.data as { items?: StockScreenerItem[] } | undefined)?.items || []).length
         : !(screener.data as unknown[] | undefined)?.length) ? (
@@ -240,9 +261,9 @@ function ScreenerTable({ items, source }: { items: StockScreenerItem[]; source?:
                 <strong>{item.name}</strong>
                 <span>{item.symbol}</span>
               </td>
-              <td>{formatNumber(item.price, 2)}</td>
-              <td className={`tone-text ${toneForPct(item.change_pct)}`}>{formatNumber(item.change_pct, 2)}%</td>
-              <td>{formatCompact(item.turnover)}</td>
+              <td>{formatOptionalNumber(item.price, 2)}</td>
+              <td className={`tone-text ${toneForPct(item.change_pct ?? 0)}`}>{formatOptionalPct(item.change_pct)}</td>
+              <td>{formatOptionalCompact(item.turnover)}</td>
               <td>{item.pe === null || item.pe === undefined ? "--" : formatNumber(item.pe, 2)}</td>
               <td>{item.pb === null || item.pb === undefined ? "--" : formatNumber(item.pb, 2)}</td>
               <td>{item.source || source || "--"}</td>
@@ -305,23 +326,41 @@ function EtfPanel() {
               <span>{item.symbol}</span>
             </div>
             <div className="quote-price">
-              <strong>{formatNumber(item.price, 2)}</strong>
-              <span className={`tone-text ${toneForPct(item.change_pct)}`}>{formatNumber(item.change_pct, 2)}%</span>
+              <strong>{formatOptionalNumber(item.price, 2)}</strong>
+              <span className={`tone-text ${toneForPct(item.change_pct ?? 0)}`}>{formatOptionalPct(item.change_pct)}</span>
             </div>
           </button>
         ))}
       </div>
-      {etfs.isError ? <EmptyState title="ETF 数据源不可用" body="免费 ETF 源暂时无法返回真实数据。" /> : null}
-      {!etfs.isPending && !etfs.data?.items.length ? <EmptyState title="暂无匹配 ETF" body="调整关键词后重新搜索。" /> : null}
+      {etfs.isError ? <EmptyState title="ETF 加载失败" body={apiFailureMessage(etfs.error, "ETF 列表")} /> : null}
+      {!etfs.isPending && !etfs.isError && etfs.data?.status === "unavailable" ? (
+        <EmptyState title="ETF 数据源不可用" body={etfs.data.detail || "免费 ETF 源暂时无法返回真实数据。"} />
+      ) : null}
+      {!etfs.isPending && !etfs.isError && etfs.data?.status !== "unavailable" && !etfs.data?.items.length ? (
+        <EmptyState title="暂无匹配 ETF" body="调整关键词后重新搜索。" />
+      ) : null}
       <div className="stocks-etf-chart">
         {candles.isPending && symbol ? <div className="chart-skeleton" /> : null}
-        {!candles.isPending && chartCandles.length ? <CandleChart candles={chartCandles} /> : null}
-        {!candles.isPending && symbol && !chartCandles.length ? (
+        {candles.isError ? <EmptyState title="ETF K 线加载失败" body={apiFailureMessage(candles.error, "ETF K 线")} /> : null}
+        {!candles.isPending && !candles.isError && chartCandles.length ? <CandleChart candles={chartCandles} /> : null}
+        {!candles.isPending && !candles.isError && symbol && !chartCandles.length ? (
           <EmptyState title="ETF K 线暂不可用" body={candles.data?.detail || "免费 ETF 历史源暂时无法返回真实数据。"} />
         ) : null}
       </div>
     </section>
   );
+}
+
+function formatOptionalNumber(value: number | null | undefined, digits = 2): string {
+  return value === null || value === undefined ? "--" : formatNumber(value, digits);
+}
+
+function formatOptionalCompact(value: number | null | undefined): string {
+  return value === null || value === undefined ? "--" : formatCompact(value);
+}
+
+function formatOptionalPct(value: number | null | undefined): string {
+  return value === null || value === undefined ? "--" : `${formatNumber(value, 2)}%`;
 }
 
 function toChartCandle(item: EtfCandleSnapshot, source: string): CandleSnapshot {

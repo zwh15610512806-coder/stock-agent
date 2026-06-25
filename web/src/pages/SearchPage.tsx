@@ -1,7 +1,8 @@
 import { FormEvent, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
-import { api } from "../lib/api";
+import { EmptyState } from "../components/EmptyState";
+import { api, apiFailureMessage } from "../lib/api";
 
 export function SearchPage() {
   const [query, setQuery] = useState("茅台");
@@ -41,6 +42,8 @@ export function SearchPage() {
             <span>{results.data?.length || 0} 条</span>
           </div>
         </div>
+        {results.isPending ? <div className="market-empty compact">正在连接后端检索服务...</div> : null}
+        {results.isError ? <EmptyState title="检索加载失败" body={apiFailureMessage(results.error, "股票检索")} /> : null}
         <div className="quote-list">
           {results.data?.map((item) => (
             <div className="quote-row" key={item.symbol}>
@@ -55,6 +58,9 @@ export function SearchPage() {
             </div>
           ))}
         </div>
+        {!results.isPending && !results.isError && !results.data?.length ? (
+          <EmptyState title="暂无匹配结果" body="调整关键词后重新检索，页面不会展示模拟证券。" />
+        ) : null}
       </section>
     </div>
   );

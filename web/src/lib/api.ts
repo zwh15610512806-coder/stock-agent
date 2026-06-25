@@ -2,6 +2,8 @@ import type {
   AiReportResponse,
   AiReportAnalysisSkill,
   CandleSnapshot,
+  CompatQuotesResponse,
+  CompatQuoteSeriesResponse,
   EtfCandlesResponse,
   EtfSearchResponse,
   MacroDashboardResponse,
@@ -11,27 +13,87 @@ import type {
   PortfolioAnalysis,
   PortfolioPosition,
   QuoteSnapshot,
+  OcrPositionsResponse,
+  SourcesStatusResponse,
   StockScreenerResponse,
   SymbolSearchResult,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "content-type": "application/json",
-      ...(options?.headers || {}),
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+export type ApiErrorKind = "network" | "http" | "parse";
+
+export class ApiError extends Error {
+  kind: ApiErrorKind;
+  status?: number;
+  body?: string;
+
+  constructor(message: string, kind: ApiErrorKind, options: { status?: number; body?: string; cause?: unknown } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.kind = kind;
+    this.status = options.status;
+    this.body = options.body;
+    if (options.cause !== undefined) {
+      this.cause = options.cause;
+    }
   }
-  return response.json() as Promise<T>;
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
+export function getApiErrorKind(error: unknown): ApiErrorKind | "unknown" {
+  return isApiError(error) ? error.kind : "unknown";
+}
+
+export function apiFailureMessage(error: unknown, label = "数据"): string {
+  if (isApiError(error)) {
+    if (error.kind === "network") {
+      return `${label}后端未连接；请确认 FastAPI 已在 127.0.0.1:8000 运行。`;
+    }
+    if (error.kind === "http") {
+      return `${label}请求失败：HTTP ${error.status ?? "--"}。`;
+    }
+    if (error.kind === "parse") {
+      return `${label}返回格式异常；请检查后端日志。`;
+    }
+  }
+  return `${label}暂不可用；请检查后端服务、网络连接和免费源状态。`;
+}
+
+async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "content-type": "application/json",
+        ...(options?.headers || {}),
+      },
+    });
+  } catch (error) {
+    throw new ApiError("Backend API is unreachable", "network", { cause: error });
+  }
+  return parseJsonResponse<T>(response);
+}
+
+async function parseJsonResponse<T>(response: Response): Promise<T> {
+  const body = await response.text();
+  if (!response.ok) {
+    throw new ApiError(`HTTP ${response.status}`, "http", { status: response.status, body });
+  }
+  try {
+    return (body ? JSON.parse(body) : null) as T;
+  } catch (error) {
+    throw new ApiError("Backend returned invalid JSON", "parse", { body, cause: error });
+  }
 }
 
 export const api = {
+  health: () => requestJson<{ status: string }>("/healthz"),
+  sourcesStatus: () => requestJson<SourcesStatusResponse>("/api/sources/status"),
   marketOverview: (markets: MarketCode[] = ["CN", "HK", "US"]) =>
     requestJson<MarketOverviewResponse>(`/api/market/overview?markets=${markets.join(",")}`),
   marketDashboard: (markets: MarketCode[] = ["CN", "HK", "US"], period = "daily") =>
@@ -42,6 +104,14 @@ export const api = {
   candles: (symbol: string, period = "daily", limit = 120) =>
     requestJson<CandleSnapshot[]>(
       `/api/market/candles?symbol=${encodeURIComponent(symbol)}&period=${period}&limit=${limit}`,
+    ),
+  compatQuotes: (symbols: string[], type = "realtime") =>
+    requestJson<CompatQuotesResponse>(
+      `/api/quotes?type=${encodeURIComponent(type)}&symbols=${encodeURIComponent(symbols.join(","))}`,
+    ),
+  compatDailySeries: (symbols: string[], limit = 120) =>
+    requestJson<CompatQuoteSeriesResponse>(
+      `/api/quotes?type=daily&symbols=${encodeURIComponent(symbols.join(","))}&limit=${limit}`,
     ),
   searchSymbols: (q: string, markets: MarketCode[] = ["CN", "HK", "US"]) =>
     requestJson<SymbolSearchResult[]>(
@@ -79,14 +149,16 @@ export const api = {
   uploadOcr: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const response = await fetch(`${API_BASE}/api/ocr/positions`, {
-      method: "POST",
-      body: form,
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/api/ocr/positions`, {
+        method: "POST",
+        body: form,
+      });
+    } catch (error) {
+      throw new ApiError("Backend API is unreachable", "network", { cause: error });
     }
-    return response.json() as Promise<{ status: string; positions: PortfolioPosition[]; message: string }>;
+    return parseJsonResponse<OcrPositionsResponse>(response);
   },
   createAiReport: (payload: {
     symbol: string;

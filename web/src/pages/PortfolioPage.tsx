@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { FileUp, Plus, Trash2, UploadCloud } from "lucide-react";
 import { MetricCard } from "../components/MetricCard";
-import { api } from "../lib/api";
+import { api, apiFailureMessage } from "../lib/api";
 import { parsePositionsCsv } from "../lib/csv";
 import { currencyForMarket } from "../lib/csv";
 import { formatNumber, toneForPct } from "../lib/format";
@@ -39,7 +39,7 @@ export function PortfolioPage() {
       return "OCR 识别中...";
     }
     if (ocrMutation.isError) {
-      return "OCR 上传失败，请检查后端服务或网络连接。";
+      return apiFailureMessage(ocrMutation.error, "OCR 识别");
     }
     if (!ocrMutation.data) {
       return "";
@@ -51,7 +51,7 @@ export function PortfolioPage() {
       return `OCR 已导入 ${ocrMutation.data.positions.length} 条持仓草稿。`;
     }
     return "OCR 未识别到可用持仓，请换一张更清晰的券商持仓截图。";
-  }, [ocrMutation.data, ocrMutation.isError, ocrMutation.isPending]);
+  }, [ocrMutation.data, ocrMutation.error, ocrMutation.isError, ocrMutation.isPending]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -108,6 +108,8 @@ export function PortfolioPage() {
         <MetricCard label="持仓数" value={positions.length} detail="本地浏览器存储" />
         <MetricCard label="最大权重" value={topWeight ? `${formatNumber(topWeight.weight * 100)}%` : "--"} detail={topWeight?.name || "--"} />
       </div>
+
+      {analysis.isError ? <div className="source-warning">{apiFailureMessage(analysis.error, "持仓分析")}</div> : null}
 
       {(analysis.data?.data_warnings?.length || analysis.data?.quote_status?.length) ? (
         <section className="data-panel portfolio-source-panel">

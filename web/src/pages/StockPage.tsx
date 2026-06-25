@@ -4,7 +4,7 @@ import { Search } from "lucide-react";
 import { CandleChart } from "../components/CandleChart";
 import { EmptyState } from "../components/EmptyState";
 import { MetricCard } from "../components/MetricCard";
-import { api } from "../lib/api";
+import { api, apiFailureMessage } from "../lib/api";
 import { formatCompact, formatNumber, toneForPct } from "../lib/format";
 import type { MarketCode } from "../lib/types";
 
@@ -14,11 +14,11 @@ export function StockPage() {
   const [market, setMarket] = useState<MarketCode>("CN");
   const quoteQuery = useQuery({
     queryKey: ["quote", querySymbol],
-    queryFn: async () => (await api.quotes([querySymbol]))[0],
+    queryFn: () => api.compatQuotes([querySymbol]),
   });
   const candles = useQuery({
     queryKey: ["candles", querySymbol],
-    queryFn: () => api.candles(querySymbol, "daily", 120),
+    queryFn: () => api.compatDailySeries([querySymbol], 120),
   });
 
   function submit(event: FormEvent) {
@@ -26,7 +26,8 @@ export function StockPage() {
     setQuerySymbol(symbol.trim().toUpperCase());
   }
 
-  const quote = quoteQuery.data;
+  const quote = quoteQuery.data?.items[0];
+  const chartCandles = candles.data?.series[0]?.items || [];
 
   return (
     <div className="page-stack">
@@ -50,29 +51,49 @@ export function StockPage() {
         </form>
       </section>
 
-      {quoteQuery.isError ? <EmptyState title="个股加载失败" body="检查代码格式或后端 API 状态。" /> : null}
+      {quoteQuery.isError ? <EmptyState title="个股加载失败" body={apiFailureMessage(quoteQuery.error, "个股报价")} /> : null}
+      {!quoteQuery.isPending && !quoteQuery.isError && quoteQuery.data?.status === "unavailable" ? (
+        <EmptyState title="个股报价暂不可用" body={quoteQuery.data.detail || "免费行情源暂时无法返回真实报价。"} />
+      ) : null}
 
       <div className="metric-grid">
-        <MetricCard label={quote?.name || querySymbol} value={formatNumber(quote?.price || 0)} detail={quote?.symbol} />
+        <MetricCard label={quote?.name || querySymbol} value={formatOptionalNumber(quote?.price)} detail={quote?.symbol || "等待报价"} />
         <MetricCard
           label="涨跌幅"
-          value={`${formatNumber(quote?.change_pct || 0)}%`}
-          detail={quote?.delay_label}
-          tone={toneForPct(quote?.change_pct || 0)}
+          value={formatOptionalPct(quote?.change_pct)}
+          detail={quote?.delay_label || "等待行情源"}
+          tone={toneForPct(quote?.change_pct ?? 0)}
         />
-        <MetricCard label="成交量" value={formatCompact(quote?.volume || 0)} detail={quote?.source} />
-        <MetricCard label="成交额估算" value={formatCompact(quote?.turnover || 0)} detail={quote?.currency} />
+        <MetricCard label="成交量" value={formatOptionalCompact(quote?.volume)} detail={quote?.source || "真实数据源"} />
+        <MetricCard label="成交额估算" value={formatOptionalCompact(quote?.turnover)} detail={quote?.currency || market} />
       </div>
 
       <section className="data-panel">
         <div className="panel-head">
           <div>
             <h3>{quote?.name || querySymbol} K线</h3>
-            <span>{candles.data?.[0]?.delay_label || "加载中"}</span>
+            <span>{chartCandles[0]?.delay_label || candles.data?.detail || "加载中"}</span>
           </div>
         </div>
-        {candles.data?.length ? <CandleChart candles={candles.data} /> : <div className="chart-skeleton" />}
+        {candles.isError ? <EmptyState title="K 线加载失败" body={apiFailureMessage(candles.error, "个股 K 线")} /> : null}
+        {!candles.isPending && !candles.isError && candles.data?.status === "unavailable" ? (
+          <EmptyState title="K 线暂不可用" body={candles.data.detail || "免费历史行情源暂时无法返回真实 K 线。"} />
+        ) : null}
+        {!candles.isPending && !candles.isError && chartCandles.length ? <CandleChart candles={chartCandles} /> : null}
+        {candles.isPending ? <div className="chart-skeleton" /> : null}
       </section>
     </div>
   );
+}
+
+function formatOptionalNumber(value: number | null | undefined, digits = 2): string {
+  return value === null || value === undefined ? "--" : formatNumber(value, digits);
+}
+
+function formatOptionalCompact(value: number | null | undefined): string {
+  return value === null || value === undefined ? "--" : formatCompact(value);
+}
+
+function formatOptionalPct(value: number | null | undefined): string {
+  return value === null || value === undefined ? "--" : `${formatNumber(value, 2)}%`;
 }

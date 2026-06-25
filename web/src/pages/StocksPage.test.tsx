@@ -16,11 +16,14 @@ vi.mock("../lib/api", () => ({
   api: {
     quotes: vi.fn(),
     candles: vi.fn(),
+    compatQuotes: vi.fn(),
+    compatDailySeries: vi.fn(),
     searchSymbols: vi.fn(),
     stockScreener: vi.fn(),
     searchEtfs: vi.fn(),
     etfCandles: vi.fn(),
   },
+  apiFailureMessage: (_error: unknown, label: string) => `${label}暂不可用`,
 }));
 
 vi.mock("../components/CandleChart", () => ({
@@ -132,8 +135,22 @@ function renderStocksPage() {
 
 describe("StocksPage center", () => {
   it("combines workbench, selector, and ETF entry points without fake ETF data", async () => {
-    vi.mocked(api.quotes).mockResolvedValue([quote]);
-    vi.mocked(api.candles).mockResolvedValue(candles);
+    vi.mocked(api.compatQuotes).mockResolvedValue({
+      type: "realtime",
+      group: "stocks",
+      status: "live",
+      source: "tencent-free-delayed",
+      as_of: "2026-06-23T15:00:00Z",
+      items: [quote],
+    });
+    vi.mocked(api.compatDailySeries).mockResolvedValue({
+      type: "daily",
+      group: "stocks",
+      status: "live",
+      source: "Yahoo Finance/free delayed fallback",
+      as_of: "2026-06-23T15:00:00Z",
+      series: [{ symbol: "600519.SH", items: candles, source: "Yahoo Finance/free delayed fallback" }],
+    });
     vi.mocked(api.searchSymbols).mockResolvedValue(searchResults);
     vi.mocked(api.stockScreener).mockResolvedValue(screenerResponse);
     vi.mocked(api.searchEtfs).mockResolvedValue(etfResponse);
@@ -163,5 +180,69 @@ describe("StocksPage center", () => {
     expect(screen.getByText(/akshare-etf/)).toBeTruthy();
     expect((await screen.findByTestId("candle-chart")).textContent).toBe("candles:1");
     expect(screen.queryByText("ETF 真实数据暂不可用")).toBeNull();
+  });
+
+  it("does not render missing screener or ETF values as zero", async () => {
+    vi.mocked(api.compatQuotes).mockResolvedValue({
+      type: "realtime",
+      group: "stocks",
+      status: "live",
+      source: "tencent-free-delayed",
+      as_of: "2026-06-23T15:00:00Z",
+      items: [quote],
+    });
+    vi.mocked(api.compatDailySeries).mockResolvedValue({
+      type: "daily",
+      group: "stocks",
+      status: "live",
+      source: "Yahoo Finance/free delayed fallback",
+      as_of: "2026-06-23T15:00:00Z",
+      series: [{ symbol: "600519.SH", items: candles, source: "Yahoo Finance/free delayed fallback" }],
+    });
+    vi.mocked(api.stockScreener).mockResolvedValue({
+      ...screenerResponse,
+      items: [{ ...screenerResponse.items[0], price: null, change_pct: null, turnover: null }],
+    });
+    vi.mocked(api.searchEtfs).mockResolvedValue({
+      ...etfResponse,
+      items: [{ ...etfResponse.items[0], price: null, change_pct: null }],
+    });
+    vi.mocked(api.etfCandles).mockResolvedValue(etfCandlesResponse);
+
+    renderStocksPage();
+
+    fireEvent.click(screen.getByRole("tab", { name: /选股器/ }));
+    expect(await screen.findAllByText("--")).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("tab", { name: /ETF/ }));
+    expect((await screen.findAllByText("--")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("0.00%")).toBeNull();
+  });
+
+  it("shows backend failure wording when ETF candle request fails", async () => {
+    vi.mocked(api.compatQuotes).mockResolvedValue({
+      type: "realtime",
+      group: "stocks",
+      status: "live",
+      source: "tencent-free-delayed",
+      as_of: "2026-06-23T15:00:00Z",
+      items: [quote],
+    });
+    vi.mocked(api.compatDailySeries).mockResolvedValue({
+      type: "daily",
+      group: "stocks",
+      status: "live",
+      source: "Yahoo Finance/free delayed fallback",
+      as_of: "2026-06-23T15:00:00Z",
+      series: [{ symbol: "600519.SH", items: candles, source: "Yahoo Finance/free delayed fallback" }],
+    });
+    vi.mocked(api.searchEtfs).mockResolvedValue(etfResponse);
+    vi.mocked(api.etfCandles).mockRejectedValue(new Error("backend offline"));
+
+    renderStocksPage();
+    fireEvent.click(screen.getByRole("tab", { name: /ETF/ }));
+
+    expect(await screen.findByText("ETF K 线加载失败")).toBeTruthy();
+    expect(screen.getByText("ETF K 线暂不可用")).toBeTruthy();
   });
 });

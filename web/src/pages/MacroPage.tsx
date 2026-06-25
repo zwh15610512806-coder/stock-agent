@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Landmark, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
 import { SourceStatusBadge } from "../components/SourceStatusBadge";
-import { api } from "../lib/api";
+import { api, apiFailureMessage } from "../lib/api";
 import { formatNumber } from "../lib/format";
 import type { SourceMetric } from "../lib/types";
 
@@ -30,7 +30,7 @@ export function MacroPage() {
         </div>
       </section>
 
-      {dashboard.isError ? <div className="source-warning">宏观数据源暂不可用；页面不会展示模拟数据。</div> : null}
+      {dashboard.isError ? <div className="source-warning">{apiFailureMessage(dashboard.error, "宏观数据")}</div> : null}
 
       <div className="metric-grid">
         <MacroMetric title="利率" icon={Landmark} items={data?.rates || []} loading={dashboard.isPending} />

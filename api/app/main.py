@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import ai, etfs, macro, market, ocr, portfolio, sources, stocks, symbols
+from app.routers import ai, compat, etfs, macro, market, ocr, portfolio, sources, stocks, symbols
 from app.services.ai_reports import DeepSeekReportService
 from app.services.market import MarketDataService
 from app.services.ocr import DoubaoVisionOcrService, TencentOcrService
@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(market.router)
+    app.include_router(compat.router)
     app.include_router(macro.router)
     app.include_router(symbols.router)
     app.include_router(stocks.router)
