@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.schemas.ai import StockInsightResponse
 from app.schemas.market import QuoteSnapshot
+from app.schemas.portfolio import PortfolioPosition
 
 
 class FakeMarketService:
@@ -46,6 +48,41 @@ class FakeOcrService:
                 }
             ],
             ["ai-json"],
+        )
+
+
+class EmptyOcrService:
+    async def recognize_positions(self, image_bytes: bytes, mime_type: str = "image/png"):
+        return "completed", [], ["| 代码 | 名称 |", "| -- | -- |"]
+
+
+class WatchlistOcrService:
+    async def recognize_positions(self, image_bytes: bytes, mime_type: str = "image/png"):
+        return "completed", [], ["同花顺自选", "4163.10+72.62", "上证指数+1.78%", "资讯"]
+
+
+class FakeStockInsightService:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    async def generate(self, payload):
+        self.calls.append(payload)
+        return StockInsightResponse(
+            status="completed",
+            symbol=payload.position.symbol,
+            market=payload.position.market,
+            as_of=datetime(2026, 6, 28, tzinfo=UTC),
+            quote=None,
+            candles=[],
+            summary="测试摘要",
+            trend=["30日走势"],
+            financials=["财报要点"],
+            events=["重要事件"],
+            risks=["风险提示"],
+            citations=[],
+            data_warnings=[],
+            model="test-model",
+            disclaimer="仅供研究参考，不构成任何证券买卖建议。",
         )
 
 
@@ -130,3 +167,68 @@ def test_ocr_positions_endpoint_uses_position_recognition_service() -> None:
     assert body["status"] == "completed"
     assert body["positions"][0]["symbol"] == "600519.SH"
     assert body["raw_lines"] == ["ai-json"]
+
+
+def test_ocr_positions_endpoint_preserves_raw_lines_when_no_positions() -> None:
+    app = create_app()
+    app.state.ocr_service = EmptyOcrService()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ocr/positions",
+        files={"file": ("positions.png", b"image", "image/png")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["positions"] == []
+    assert body["raw_lines"] == ["| 代码 | 名称 |", "| -- | -- |"]
+    assert "缺少持仓数量" in body["message"]
+
+
+def test_ocr_positions_endpoint_explains_non_holding_screenshot() -> None:
+    app = create_app()
+    app.state.ocr_service = WatchlistOcrService()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ocr/positions",
+        files={"file": ("watchlist.png", b"image", "image/png")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["positions"] == []
+    assert "不像券商持仓页" in body["message"]
+    assert "持仓数量" in body["message"]
+
+
+def test_stock_insight_endpoint_uses_service() -> None:
+    app = create_app()
+    fake_service = FakeStockInsightService()
+    app.state.stock_insight_service = fake_service
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ai/stock-insights",
+        json={
+            "position": PortfolioPosition(
+                symbol="600519.SH",
+                name="贵州茅台",
+                market="CN",
+                quantity=10,
+                cost_price=1000,
+                current_price=1200,
+                currency="CNY",
+            ).model_dump(mode="json"),
+            "horizon_days": 30,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["summary"] == "测试摘要"
+    assert len(fake_service.calls) == 1
+    assert fake_service.calls[0].position.symbol == "600519.SH"

@@ -11,6 +11,7 @@ from app.schemas.market import (
     MarketDashboardResponse,
     MarketOverviewItem,
     QuoteSnapshot,
+    SymbolSearchResult,
 )
 from app.schemas.stocks import StockScreenerItem, StockScreenerResponse
 
@@ -41,6 +42,11 @@ class FakeMarketService:
             name = "CATL"
             price = 210.0
             change_pct = -1.2
+            source = "sina-free-delayed"
+        elif symbol == "300185.SZ":
+            name = "Tongyu Heavy Industry"
+            price = 2.56
+            change_pct = 1.19
             source = "sina-free-delayed"
         else:
             raise RuntimeError(f"no quote for {symbol}")
@@ -262,6 +268,32 @@ def test_stocks_v2_search_screener_compare_and_ranking_contracts(monkeypatch) ->
     assert [item["symbol"] for item in compare_response.json()["items"]] == ["600519.SH", "300750.SZ"]
     assert ranking_response.status_code == 200
     assert ranking_response.json()["items"][0]["symbol"] == "600519.SH"
+
+
+def test_quotes_compat_resolves_a_share_name_from_symbol_pool(monkeypatch) -> None:
+    client = make_client()
+
+    def fake_pool(*args, **kwargs) -> list[SymbolSearchResult]:
+        return [
+            SymbolSearchResult(
+                symbol="300185.SZ",
+                name="\u901a\u88d5\u91cd\u5de5",
+                market="CN",
+                currency="CNY",
+                type="stock",
+                source="test-symbol-pool",
+                exchange="SZ",
+            )
+        ]
+
+    monkeypatch.setattr("app.services.symbols._a_share_pool", fake_pool)
+
+    response = client.get("/api/quotes", params={"type": "realtime", "symbols": "\u901a\u88d5\u91cd\u5de5"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "live"
+    assert body["items"][0]["symbol"] == "300185.SZ"
 
 
 def test_etf_catalog_and_macro_timeseries_wrappers() -> None:

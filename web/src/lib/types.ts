@@ -134,6 +134,9 @@ export interface DragonTigerItem {
   trade_date: string;
   close: number;
   change_pct: number;
+  turnover: number;
+  sector: string;
+  mini_candles: CandleSnapshot[];
   net_amount: number;
   buy_amount: number;
   sell_amount: number;
@@ -156,7 +159,9 @@ export interface MarketDashboardResponse {
   } | null;
   a_share_activity: AShareActivity | null;
   fund_flow_summary: FundFlowSummary | null;
+  etf_heatmap: DashboardHeatItem[];
   industry_heatmap: DashboardHeatItem[];
+  sector_heatmap: DashboardHeatItem[];
   concept_heatmap: DashboardHeatItem[];
   region_heatmap: DashboardHeatItem[];
   market_news: MarketNewsItem[];
@@ -290,6 +295,14 @@ export interface PortfolioPosition {
   cost_price: number;
   current_price: number;
   currency: string;
+  available_quantity?: number | null;
+  market_value?: number | null;
+  cost_value?: number | null;
+  pnl?: number | null;
+  pnl_pct?: number | null;
+  source?: string | null;
+  source_snapshot_at?: string | null;
+  raw_fields?: Record<string, string>;
 }
 
 export interface PortfolioAnalysis {
@@ -376,5 +389,30 @@ export interface AiReportResponse {
     skill_label?: string;
     [key: string]: unknown;
   };
+  disclaimer: string;
+}
+
+export interface StockInsightCitation {
+  title: string;
+  url: string;
+  source: string;
+  published_at?: string | null;
+}
+
+export interface StockInsightResponse {
+  status: "completed" | "partial" | "unavailable" | "failed";
+  symbol: string;
+  market: MarketCode;
+  as_of: string;
+  quote: QuoteSnapshot | null;
+  candles: CandleSnapshot[];
+  summary: string;
+  trend: string[];
+  financials: string[];
+  events: string[];
+  risks: string[];
+  citations: StockInsightCitation[];
+  data_warnings: string[];
+  model: string;
   disclaimer: string;
 }

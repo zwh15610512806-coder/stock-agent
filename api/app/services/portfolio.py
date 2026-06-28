@@ -150,7 +150,7 @@ def analyze_portfolio(
         pnl_pct = round(pnl / cost_value, 6) if cost_value else 0
         analyzed.append(
             PortfolioPositionAnalysis(
-                **position.model_dump(),
+                **position.model_dump(exclude={"market_value", "cost_value", "pnl", "pnl_pct"}),
                 market_value=market_value,
                 cost_value=cost_value,
                 pnl=pnl,

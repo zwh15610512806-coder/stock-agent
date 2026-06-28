@@ -15,6 +15,7 @@ import type {
   QuoteSnapshot,
   OcrPositionsResponse,
   SourcesStatusResponse,
+  StockInsightResponse,
   StockScreenerResponse,
   SymbolSearchResult,
 } from "./types";
@@ -171,6 +172,11 @@ export const api = {
     risk_profile: string;
   }) =>
     requestJson<AiReportResponse>("/api/ai/reports", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  stockInsight: (payload: { position: PortfolioPosition; horizon_days: number }) =>
+    requestJson<StockInsightResponse>("/api/ai/stock-insights", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

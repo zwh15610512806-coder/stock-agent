@@ -160,6 +160,9 @@ class DragonTigerItem(BaseModel):
     trade_date: str
     close: float = 0
     change_pct: float = 0
+    turnover: float = 0
+    sector: str = ""
+    mini_candles: list[CandleSnapshot] = Field(default_factory=list)
     net_amount: float = 0
     buy_amount: float = 0
     sell_amount: float = 0
@@ -177,7 +180,9 @@ class MarketDashboardResponse(BaseModel):
     a_share_activity: AShareActivity | None = None
     a_share_turnover: AShareTurnover | None = None
     fund_flow_summary: FundFlowSummary | None = None
+    etf_heatmap: list[DashboardHeatItem] = []
     industry_heatmap: list[DashboardHeatItem] = []
+    sector_heatmap: list[DashboardHeatItem] = []
     concept_heatmap: list[DashboardHeatItem] = []
     region_heatmap: list[DashboardHeatItem] = []
     market_news: list[MarketNewsItem] = []

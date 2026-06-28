@@ -34,6 +34,7 @@ from app.schemas.market import (
     QuoteSnapshot,
     SymbolSearchResult,
 )
+from app.services.etfs import ETFService, ETF_SPOT_SOURCE
 from app.services.market_cache import CachedSnapshot, MarketSnapshotCache
 from app.services.symbols import (
     currency_for_market,
@@ -52,15 +53,28 @@ LEGU_SOURCE = "legulegu-market-activity"
 THS_SOURCE = "ths-fund-flow"
 EASTMONEY_SOURCE = "eastmoney-sector-fund-flow"
 NEWS_SOURCE = "cls-telegraph"
+MODEL_NEWS_SOURCE = "model-web-search"
+COMBINED_NEWS_SOURCE = "model-web-search/akshare-news"
 COMMODITY_SOURCE = "akshare-commodity"
 LHB_SOURCE = "eastmoney-lhb"
 ASHARE_TURNOVER_SOURCE = "akshare-exchange-summary"
+DRAGON_TIGER_MINI_CANDLE_LIMIT = 20
+DRAGON_TIGER_SECTOR_FIELDS = ("所属行业", "行业", "板块", "行业板块", "sector", "industry")
 SNAPSHOT_TTL_SECONDS = 10 * 60
 SLOW_SNAPSHOT_TTL_SECONDS = 30 * 60
-DASHBOARD_SOURCE_TIMEOUT_SECONDS = 5.0
-DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS = 5.0
-DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS = 2.0
+DASHBOARD_SOURCE_TIMEOUT_SECONDS = 8.0
+DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS = 12.0
+DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS = 6.0
 DASHBOARD_FAILURE_COOLDOWN_SECONDS = 3 * 60
+DASHBOARD_HEATMAP_LIMIT = 120
+DASHBOARD_OPTIONAL_STATUS_NAMES = {
+    "etf_heatmap",
+    "fund_flow_summary",
+    "market_news",
+    "commodity_quotes",
+    "dragon_tiger",
+    "index_sparklines",
+}
 AKSHARE_WORKER_ENV = "ZTOU_AKSHARE_WORKER"
 T = TypeVar("T")
 
@@ -99,10 +113,24 @@ class MarketDataService:
         cache_ttl_seconds: int = 90,
         akshare_module: object | None = None,
         snapshot_cache: MarketSnapshotCache | None = None,
+        news_search_api_key: str = "",
+        news_search_api_base: str = "https://api.openai.com/v1",
+        news_search_model: str = "gpt-4.1-mini",
+        news_search_timeout_seconds: float = 8.0,
+        dashboard_source_timeout_seconds: float = DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+        dashboard_slow_source_timeout_seconds: float = DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS,
+        dashboard_optional_source_timeout_seconds: float = DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS,
     ) -> None:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.akshare_module = akshare_module
         self.snapshot_cache = snapshot_cache or MarketSnapshotCache(_default_snapshot_cache_path())
+        self.news_search_api_key = news_search_api_key
+        self.news_search_api_base = news_search_api_base.rstrip("/")
+        self.news_search_model = news_search_model
+        self.news_search_timeout_seconds = news_search_timeout_seconds
+        self.dashboard_source_timeout_seconds = max(0.1, dashboard_source_timeout_seconds)
+        self.dashboard_slow_source_timeout_seconds = max(0.1, dashboard_slow_source_timeout_seconds)
+        self.dashboard_optional_source_timeout_seconds = max(0.1, dashboard_optional_source_timeout_seconds)
         self._quote_cache: dict[str, tuple[float, QuoteSnapshot]] = {}
         self._candle_cache: dict[tuple[str, str, int], tuple[float, list[CandleSnapshot]]] = {}
         self._dashboard_failure_cache: dict[str, tuple[float, str]] = {}
@@ -171,6 +199,10 @@ class MarketDataService:
     async def dashboard(self, markets: list[MarketCode], period: str) -> MarketDashboardResponse:
         normalized_markets = markets or ["CN", "HK", "US"]
         normalized_period = period if period in {"daily", "weekly", "monthly"} else "daily"
+        source_timeout = self.dashboard_source_timeout_seconds
+        slow_source_timeout = self.dashboard_slow_source_timeout_seconds
+        optional_source_timeout = self.dashboard_optional_source_timeout_seconds
+        news_timeout = max(optional_source_timeout, self.news_search_timeout_seconds)
         source_status: list[DashboardSourceStatus] = []
 
         primary_quote_task = asyncio.create_task(self._fetch_dashboard_quote("000001.SH"))
@@ -190,7 +222,7 @@ class MarketDataService:
             serializer=lambda item: item.model_dump(mode="json"),
             deserializer=lambda payload: AShareActivity.model_validate(payload),
             empty_value=None,
-            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=source_timeout,
         ))
 
         turnover_task = asyncio.create_task(self._cached_dashboard_source(
@@ -202,7 +234,19 @@ class MarketDataService:
             serializer=lambda item: item.model_dump(mode="json"),
             deserializer=lambda payload: AShareTurnover.model_validate(payload),
             empty_value=None,
-            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=source_timeout,
+        ))
+
+        etf_task = asyncio.create_task(self._cached_dashboard_source(
+            key="dashboard:etf_heatmap",
+            name="etf_heatmap",
+            source=ETF_SPOT_SOURCE,
+            ttl_seconds=SNAPSHOT_TTL_SECONDS,
+            fetcher=self._fetch_etf_heatmap_sync,
+            serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
+            deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
+            empty_value=[],
+            timeout_seconds=source_timeout,
         ))
 
         industry_task = asyncio.create_task(self._cached_dashboard_source(
@@ -214,7 +258,19 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=source_timeout,
+        ))
+
+        sector_task = asyncio.create_task(self._cached_dashboard_source(
+            key="dashboard:sector_heatmap",
+            name="sector_heatmap",
+            source=EASTMONEY_SOURCE,
+            ttl_seconds=SNAPSHOT_TTL_SECONDS,
+            fetcher=self._fetch_sector_heatmap_sync,
+            serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
+            deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
+            empty_value=[],
+            timeout_seconds=optional_source_timeout,
         ))
 
         concept_task = asyncio.create_task(self._cached_dashboard_source(
@@ -226,7 +282,7 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=source_timeout,
         ))
 
         region_task = asyncio.create_task(self._cached_dashboard_source(
@@ -238,7 +294,7 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DashboardHeatItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-            timeout_seconds=DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=optional_source_timeout,
         ))
 
         fund_task = asyncio.create_task(self._cached_dashboard_source(
@@ -250,19 +306,19 @@ class MarketDataService:
             serializer=lambda item: item.model_dump(mode="json"),
             deserializer=lambda payload: FundFlowSummary.model_validate(payload),
             empty_value=None,
-            timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=slow_source_timeout,
         ))
 
         news_task = asyncio.create_task(self._cached_dashboard_source(
             key="dashboard:market_news",
             name="market_news",
-            source=NEWS_SOURCE,
+            source=COMBINED_NEWS_SOURCE,
             ttl_seconds=SNAPSHOT_TTL_SECONDS,
             fetcher=self._fetch_market_news_sync,
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [MarketNewsItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-            timeout_seconds=DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=news_timeout,
         ))
 
         commodity_task = asyncio.create_task(self._cached_dashboard_source(
@@ -274,7 +330,7 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [CommodityQuote.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-            timeout_seconds=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=source_timeout,
         ))
 
         dragon_tiger_task = asyncio.create_task(self._cached_dashboard_source(
@@ -286,7 +342,7 @@ class MarketDataService:
             serializer=lambda items: {"items": [item.model_dump(mode="json") for item in items]},
             deserializer=lambda payload: [DragonTigerItem.model_validate(item) for item in payload.get("items", [])],
             empty_value=[],
-            timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS,
+            timeout_seconds=slow_source_timeout,
         ))
 
         activity, activity_status = await activity_task
@@ -300,7 +356,9 @@ class MarketDataService:
         (
             (primary_quote, primary_quote_status),
             (primary_candles, primary_candles_status),
+            (etf_heatmap, etf_status),
             (industry_heatmap, industry_status),
+            (sector_heatmap, sector_status),
             (concept_heatmap, concept_status),
             (region_heatmap, region_status),
             (fund_flow_summary, fund_status),
@@ -311,7 +369,9 @@ class MarketDataService:
         ) = await asyncio.gather(
             primary_quote_task,
             primary_candles_task,
+            etf_task,
             industry_task,
+            sector_task,
             concept_task,
             region_task,
             fund_task,
@@ -326,7 +386,9 @@ class MarketDataService:
                 primary_candles_status,
                 activity_status,
                 turnover_status,
+                etf_status,
                 industry_status,
+                sector_status,
                 concept_status,
                 region_status,
                 fund_status,
@@ -348,7 +410,9 @@ class MarketDataService:
             a_share_activity=activity,
             a_share_turnover=a_share_turnover,
             fund_flow_summary=fund_flow_summary,
+            etf_heatmap=etf_heatmap,
             industry_heatmap=industry_heatmap,
+            sector_heatmap=sector_heatmap,
             concept_heatmap=concept_heatmap,
             region_heatmap=region_heatmap,
             market_news=market_news,
@@ -362,11 +426,11 @@ class MarketDataService:
         try:
             quote = await asyncio.wait_for(
                 self._fetch_quote_without_sample(symbol),
-                timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+                timeout=self.dashboard_source_timeout_seconds,
             )
             return quote, DashboardSourceStatus(name="primary_quote", status="live", source=quote.source, as_of=quote.as_of)
         except Exception as exc:
-            detail = f"source timed out after {DASHBOARD_SOURCE_TIMEOUT_SECONDS:g}s" if isinstance(exc, TimeoutError) else str(exc)
+            detail = f"source timed out after {self.dashboard_source_timeout_seconds:g}s" if isinstance(exc, TimeoutError) else str(exc)
             return None, DashboardSourceStatus(
                 name="primary_quote",
                 status="unavailable",
@@ -383,14 +447,14 @@ class MarketDataService:
         try:
             candles = await asyncio.wait_for(
                 self._fetch_primary_candles(normalize_symbol(symbol, None), period, limit),
-                timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+                timeout=self.dashboard_source_timeout_seconds,
             )
             source = candles[-1].source if candles else "market-candles"
             if source == "sample fallback":
                 raise RuntimeError(f"sample candles rejected for dashboard: {symbol}")
             return candles, DashboardSourceStatus(name="primary_candles", status="live", source=source)
         except Exception as exc:
-            detail = f"source timed out after {DASHBOARD_SOURCE_TIMEOUT_SECONDS:g}s" if isinstance(exc, TimeoutError) else str(exc)
+            detail = f"source timed out after {self.dashboard_source_timeout_seconds:g}s" if isinstance(exc, TimeoutError) else str(exc)
             return [], DashboardSourceStatus(
                 name="primary_candles",
                 status="unavailable",
@@ -410,7 +474,7 @@ class MarketDataService:
             async def fetch_index_quote(symbol: str) -> QuoteSnapshot:
                 return await asyncio.wait_for(
                     self._fetch_quote_without_sample(symbol),
-                    timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+                    timeout=self.dashboard_source_timeout_seconds,
                 )
 
             quotes = await asyncio.gather(
@@ -506,7 +570,7 @@ class MarketDataService:
 
     def _fetch_a_share_activity_sync(self) -> AShareActivity:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("a_share_activity")
+            payload = self._run_akshare_worker_sync("a_share_activity", timeout_seconds=self.dashboard_source_timeout_seconds)
             return AShareActivity.model_validate(payload)
         with _without_proxy_env():
             rows = _records(self._akshare().stock_market_activity_legu())
@@ -547,7 +611,7 @@ class MarketDataService:
 
     def _fetch_fund_flow_heatmap_sync(self, kind: str) -> list[DashboardHeatItem]:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync(f"{kind}_heatmap")
+            payload = self._run_akshare_worker_sync(f"{kind}_heatmap", timeout_seconds=self.dashboard_source_timeout_seconds)
             return [DashboardHeatItem.model_validate(item) for item in payload]
         with _without_proxy_env():
             akshare = self._akshare()
@@ -557,11 +621,11 @@ class MarketDataService:
                 rows = _records(akshare.stock_fund_flow_concept(symbol="即时"))
             else:
                 raise ValueError(f"Unsupported heatmap kind: {kind}")
-        return _heat_items_from_rows(rows, THS_SOURCE, limit=12)
+        return _heat_items_from_rows(rows, THS_SOURCE, limit=DASHBOARD_HEATMAP_LIMIT)
 
     def _fetch_region_heatmap_sync(self) -> list[DashboardHeatItem]:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("region_heatmap")
+            payload = self._run_akshare_worker_sync("region_heatmap", timeout_seconds=self.dashboard_optional_source_timeout_seconds)
             return [DashboardHeatItem.model_validate(item) for item in payload]
         with _without_proxy_env():
             rows = _records(
@@ -570,11 +634,47 @@ class MarketDataService:
                     sector_type="地域资金流",
                 )
             )
-        return _heat_items_from_rows(rows, EASTMONEY_SOURCE, limit=12)
+        return _heat_items_from_rows(rows, EASTMONEY_SOURCE, limit=DASHBOARD_HEATMAP_LIMIT)
+
+    def _fetch_sector_heatmap_sync(self) -> list[DashboardHeatItem]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("sector_heatmap", timeout_seconds=self.dashboard_optional_source_timeout_seconds)
+            return [DashboardHeatItem.model_validate(item) for item in payload]
+        with _without_proxy_env():
+            rows = _records(
+                self._akshare().stock_sector_fund_flow_rank(
+                    indicator="今日",
+                    sector_type="行业资金流",
+                )
+            )
+        return _heat_items_from_rows(rows, EASTMONEY_SOURCE, limit=DASHBOARD_HEATMAP_LIMIT)
+
+    def _fetch_etf_heatmap_sync(self) -> list[DashboardHeatItem]:
+        if self._use_akshare_worker():
+            payload = self._run_akshare_worker_sync("etf_heatmap", timeout_seconds=self.dashboard_source_timeout_seconds)
+            return [DashboardHeatItem.model_validate(item) for item in payload]
+        response = ETFService(akshare_module=self.akshare_module)._search_sync("", DASHBOARD_HEATMAP_LIMIT)
+        if response.status != "live":
+            raise RuntimeError(response.detail or "ETF spot source unavailable")
+        items: list[DashboardHeatItem] = []
+        for quote in response.items:
+            change_pct = quote.change_pct or 0
+            turnover = quote.turnover or 0
+            items.append(
+                DashboardHeatItem(
+                    name=quote.name,
+                    change_pct=change_pct,
+                    turnover=turnover,
+                    net_amount=0,
+                    direction=_direction_for_pct(change_pct),
+                    source=quote.source,
+                )
+            )
+        return items[:DASHBOARD_HEATMAP_LIMIT]
 
     def _fetch_fund_flow_summary_sync(self) -> FundFlowSummary:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("fund_flow_summary", timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS)
+            payload = self._run_akshare_worker_sync("fund_flow_summary", timeout_seconds=self.dashboard_slow_source_timeout_seconds)
             return FundFlowSummary.model_validate(payload)
         with _without_proxy_env():
             rows = _records(self._akshare().stock_fund_flow_individual(symbol="即时"))
@@ -591,11 +691,29 @@ class MarketDataService:
         )
 
     def _fetch_market_news_sync(self) -> list[MarketNewsItem]:
-        if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("market_news")
-            return [MarketNewsItem.model_validate(item) for item in payload]
-        akshare = self._akshare()
+        items: list[MarketNewsItem] = []
         errors: list[str] = []
+
+        if self.news_search_api_key:
+            try:
+                items.extend(self._fetch_model_market_news_sync())
+            except Exception as exc:
+                errors.append(f"{MODEL_NEWS_SOURCE}: {exc}")
+
+        if self._use_akshare_worker():
+            try:
+                payload = self._run_akshare_worker_sync(
+                    "market_news",
+                    timeout_seconds=max(self.dashboard_optional_source_timeout_seconds, self.news_search_timeout_seconds),
+                )
+                items.extend(MarketNewsItem.model_validate(item) for item in payload)
+            except Exception as exc:
+                errors.append(f"{NEWS_SOURCE}: {exc}")
+            if items:
+                return _dedupe_news_items(items)[:24]
+            raise RuntimeError("; ".join(errors) or "market news returned no rows")
+
+        akshare = self._akshare()
         for source, fetcher in (
             (NEWS_SOURCE, lambda: akshare.stock_info_global_cls(symbol="全部")),
             ("eastmoney-global-news", lambda: akshare.stock_info_global_em()),
@@ -604,16 +722,40 @@ class MarketDataService:
             try:
                 with _without_proxy_env():
                     rows = _records(fetcher())
-                items = _news_items_from_rows(rows, source)
-                if items:
-                    return items[:12]
+                items.extend(_news_items_from_rows(rows, source))
             except Exception as exc:
                 errors.append(f"{source}: {exc}")
+        if items:
+            return _dedupe_news_items(items)[:24]
         raise RuntimeError("; ".join(errors) or "market news returned no rows")
+
+    def _fetch_model_market_news_sync(self) -> list[MarketNewsItem]:
+        prompt = _model_news_prompt()
+        payload = {
+            "model": self.news_search_model,
+            "tools": [{"type": "web_search"}],
+            "tool_choice": "required",
+            "input": prompt,
+        }
+        async_base = self.news_search_api_base.rstrip("/")
+        async_url = f"{async_base}/responses"
+        with httpx.Client(timeout=self.news_search_timeout_seconds, trust_env=False) as client:
+            response = client.post(
+                async_url,
+                headers={"Authorization": f"Bearer {self.news_search_api_key}"},
+                json=payload,
+            )
+            response.raise_for_status()
+        body = response.json()
+        text = _responses_output_text(body)
+        if not text:
+            raise RuntimeError("model web search returned no text")
+        parsed = _json_object_from_text(text)
+        return _model_news_items_from_payload(parsed)
 
     def _fetch_commodity_quotes_sync(self) -> list[CommodityQuote]:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("commodity_quotes")
+            payload = self._run_akshare_worker_sync("commodity_quotes", timeout_seconds=self.dashboard_source_timeout_seconds)
             return [CommodityQuote.model_validate(item) for item in payload]
         akshare = self._akshare()
         items: list[CommodityQuote] = []
@@ -640,7 +782,7 @@ class MarketDataService:
 
     def _fetch_dragon_tiger_sync(self) -> list[DragonTigerItem]:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("dragon_tiger", timeout_seconds=DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS)
+            payload = self._run_akshare_worker_sync("dragon_tiger", timeout_seconds=self.dashboard_slow_source_timeout_seconds)
             return [DragonTigerItem.model_validate(item) for item in payload]
         today = datetime.now(UTC).date()
         start_date = (today - timedelta(days=10)).strftime("%Y%m%d")
@@ -653,7 +795,53 @@ class MarketDataService:
             raise RuntimeError("dragon tiger source returned no rows")
         latest_date = max(item.trade_date for item in items)
         latest_items = [item for item in items if item.trade_date == latest_date]
-        return sorted(latest_items, key=lambda item: item.net_amount, reverse=True)[:10]
+        latest_items = sorted(latest_items, key=lambda item: item.net_amount, reverse=True)
+        sector_by_code = self._dragon_tiger_sector_map_sync(latest_items)
+        enriched_items: list[DragonTigerItem] = []
+        for item in latest_items:
+            code = _dragon_tiger_code_key(item.symbol)
+            sector = item.sector or sector_by_code.get(code, "")
+            enriched_items.append(
+                item.model_copy(
+                    update={
+                        "sector": sector,
+                        "mini_candles": self._dragon_tiger_mini_candles_sync(item.symbol),
+                    }
+                )
+            )
+        return enriched_items
+
+    def _dragon_tiger_sector_map_sync(self, items: list[DragonTigerItem]) -> dict[str, str]:
+        missing_codes = {_dragon_tiger_code_key(item.symbol) for item in items if not item.sector}
+        missing_codes.discard("")
+        if not missing_codes:
+            return {}
+        try:
+            with _without_proxy_env():
+                rows = _records(self._akshare().stock_zh_a_spot_em())
+        except Exception:
+            return {}
+
+        sectors: dict[str, str] = {}
+        for row in rows:
+            code = _dragon_tiger_code_key(_row_value(row, ("代码", "股票代码", "code", "symbol")))
+            if code not in missing_codes or code in sectors:
+                continue
+            sector = _dragon_tiger_sector_from_row(row)
+            if sector:
+                sectors[code] = sector
+        return sectors
+
+    def _dragon_tiger_mini_candles_sync(self, symbol: str) -> list[CandleSnapshot]:
+        try:
+            candles = self._fetch_akshare_candles_sync(
+                normalize_symbol(symbol, "CN"),
+                "daily",
+                DRAGON_TIGER_MINI_CANDLE_LIMIT,
+            )
+        except Exception:
+            return []
+        return [candle for candle in candles[-DRAGON_TIGER_MINI_CANDLE_LIMIT:] if "sample" not in candle.source.lower()]
 
     async def _dashboard_index_sparklines(
         self,
@@ -667,12 +855,12 @@ class MarketDataService:
             try:
                 candles = await asyncio.wait_for(
                     self._fetch_primary_candles(symbol, "daily", 24),
-                    timeout=DASHBOARD_SOURCE_TIMEOUT_SECONDS,
+                    timeout=self.dashboard_source_timeout_seconds,
                 )
                 closes = [round(candle.close, 4) for candle in candles[-18:] if candle.close > 0]
                 return symbol, closes or None, None
             except Exception as exc:
-                detail = f"timed out after {DASHBOARD_SOURCE_TIMEOUT_SECONDS:g}s" if isinstance(exc, TimeoutError) else str(exc)
+                detail = f"timed out after {self.dashboard_source_timeout_seconds:g}s" if isinstance(exc, TimeoutError) else str(exc)
                 return symbol, None, detail
 
         for symbol, closes, error in await asyncio.gather(*(fetch_symbol(symbol) for symbol in symbols)):
@@ -682,10 +870,9 @@ class MarketDataService:
                 errors.append(f"{symbol}: {error}")
 
         if output:
-            status = "live" if not errors else "stale"
             return output, DashboardSourceStatus(
                 name="index_sparklines",
-                status=status,
+                status="live",
                 source="market-candles",
                 detail="; ".join(errors[:3]),
             )
@@ -735,7 +922,7 @@ class MarketDataService:
 
     def _fetch_akshare_quote_sync(self, symbol: str) -> QuoteSnapshot:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("quote", symbol)
+            payload = self._run_akshare_worker_sync("quote", symbol, timeout_seconds=self.dashboard_source_timeout_seconds)
             return QuoteSnapshot.model_validate(payload)
         with _without_proxy_env():
             akshare = self._akshare()
@@ -780,7 +967,13 @@ class MarketDataService:
 
     def _fetch_akshare_candles_sync(self, symbol: str, period: str, limit: int) -> list[CandleSnapshot]:
         if self._use_akshare_worker():
-            payload = self._run_akshare_worker_sync("candles", symbol, period, str(limit))
+            payload = self._run_akshare_worker_sync(
+                "candles",
+                symbol,
+                period,
+                str(limit),
+                timeout_seconds=self.dashboard_source_timeout_seconds,
+            )
             return [CandleSnapshot.model_validate(item) for item in payload]
         with _without_proxy_env():
             akshare = self._akshare()
@@ -1066,11 +1259,13 @@ def parse_pct(value: object) -> float:
 def _dashboard_cache_status(statuses: list[DashboardSourceStatus]) -> DashboardCacheStatus:
     if not statuses:
         return "unavailable"
-    if all(item.status == "live" for item in statuses):
+    core_statuses = [item for item in statuses if item.name not in DASHBOARD_OPTIONAL_STATUS_NAMES]
+    evaluated_statuses = core_statuses or statuses
+    if all(item.status == "live" for item in evaluated_statuses):
         return "live"
-    if any(item.status == "stale" for item in statuses):
+    if any(item.status == "stale" for item in evaluated_statuses):
         return "stale"
-    if any(item.status == "live" for item in statuses):
+    if any(item.status == "live" for item in evaluated_statuses):
         return "partial"
     return "unavailable"
 
@@ -1153,6 +1348,102 @@ def _news_items_from_rows(rows: list[Mapping[str, object]], source: str) -> list
     )
 
 
+def _model_news_prompt() -> str:
+    shanghai_now = datetime.now(UTC) + timedelta(hours=8)
+    return (
+        "你是财经快讯编辑。请使用联网搜索获取最近24小时内与A股、港股、美股、央行、宏观、"
+        "大宗商品、上市公司相关的中文财经快讯。严格只输出 JSON，不要 Markdown。\n"
+        f"当前北京时间：{shanghai_now.strftime('%Y-%m-%d %H:%M:%S')}。\n"
+        "输出结构：{\"items\":[{\"title\":\"不超过40字\","
+        "\"content\":\"不超过120字，说明事实和市场相关性\","
+        "\"published_at\":\"ISO 8601 时间，无法确认则为 null\","
+        "\"source\":\"媒体或机构名\","
+        "\"url\":\"可点击原文或搜索结果 URL\"}]}。\n"
+        "要求：最多12条，按发布时间倒序；必须有可验证 URL；不要编造数据、观点或来源；"
+        "不要输出投资建议。"
+    )
+
+
+def _responses_output_text(body: Mapping[str, object]) -> str:
+    direct = body.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    chunks: list[str] = []
+    output = body.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, Mapping) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+                    chunks.append(str(part["text"]))
+    return "\n".join(chunks).strip()
+
+
+def _json_object_from_text(text: str) -> dict[str, object]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end <= start:
+        raise RuntimeError("model web search did not return a JSON object")
+    try:
+        value = json.loads(cleaned[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"model web search returned invalid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("model web search JSON root is not an object")
+    return value
+
+
+def _model_news_items_from_payload(payload: Mapping[str, object]) -> list[MarketNewsItem]:
+    rows = payload.get("items")
+    if not isinstance(rows, list):
+        raise RuntimeError("model web search JSON missing items")
+    items: list[MarketNewsItem] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        title = _clean_text(row.get("title"))
+        url = _clean_text(row.get("url"))
+        if not title or not url:
+            continue
+        items.append(
+            MarketNewsItem(
+                title=title[:80],
+                content=_clean_text(row.get("content"))[:180],
+                published_at=_parse_optional_datetime(row.get("published_at")),
+                source=_clean_text(row.get("source")) or MODEL_NEWS_SOURCE,
+                url=url,
+            )
+        )
+    if not items:
+        raise RuntimeError("model web search returned no usable news items")
+    return items
+
+
+def _dedupe_news_items(items: list[MarketNewsItem]) -> list[MarketNewsItem]:
+    seen: set[str] = set()
+    output: list[MarketNewsItem] = []
+    for item in sorted(
+        items,
+        key=lambda news: news.published_at or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    ):
+        key = item.url.strip() or item.title.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        output.append(item)
+    return output
+
+
 def _commodity_from_sge_rows(
     rows: list[Mapping[str, object]],
     symbol: str,
@@ -1207,6 +1498,21 @@ def _commodities_from_global_futures(rows: list[Mapping[str, object]]) -> list[C
     return items[:4]
 
 
+def _dragon_tiger_code_key(value: object) -> str:
+    text = _clean_text(value).upper()
+    if not text:
+        return ""
+    if "." in text:
+        text = _plain_code(text)
+    for prefix in ("SH", "SZ", "BJ", "HK"):
+        text = text.removeprefix(prefix)
+    return text
+
+
+def _dragon_tiger_sector_from_row(row: Mapping[str, object]) -> str:
+    return _clean_text(_row_value(row, DRAGON_TIGER_SECTOR_FIELDS))
+
+
 def _dragon_tiger_item_from_row(row: Mapping[str, object]) -> DragonTigerItem | None:
     symbol = _clean_text(_row_value(row, ("代码", "股票代码", "symbol")))
     name = _clean_text(_row_value(row, ("名称", "股票名称", "name")))
@@ -1219,6 +1525,8 @@ def _dragon_tiger_item_from_row(row: Mapping[str, object]) -> DragonTigerItem | 
         trade_date=trade_date,
         close=_safe_float(_row_value(row, ("收盘价", "close"))),
         change_pct=parse_pct(_row_value(row, ("涨跌幅", "change_pct"))),
+        turnover=parse_cn_money(_row_value(row, ("成交额", "成交金额", "成交金额(元)", "成交金额（元）", "turnover", "amount"))),
+        sector=_dragon_tiger_sector_from_row(row),
         net_amount=parse_cn_money(_row_value(row, ("龙虎榜净买额", "机构买入净额", "净额", "net_amount"))),
         buy_amount=parse_cn_money(_row_value(row, ("龙虎榜买入额", "买入金额", "buy_amount"))),
         sell_amount=parse_cn_money(_row_value(row, ("龙虎榜卖出额", "卖出金额", "sell_amount"))),

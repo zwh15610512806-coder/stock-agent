@@ -17,10 +17,14 @@ export default defineConfig({
     },
   },
   server: {
+    allowedHosts: true,
     proxy: {
       "/api": "http://127.0.0.1:8000",
       "/healthz": "http://127.0.0.1:8000",
     },
+  },
+  preview: {
+    allowedHosts: true,
   },
   test: {
     environment: "jsdom",

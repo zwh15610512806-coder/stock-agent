@@ -9,6 +9,14 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_api_base: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    openai_api_key: str = ""
+    news_search_api_key: str = ""
+    news_search_api_base: str = "https://api.openai.com/v1"
+    news_search_model: str = "gpt-4.1-mini"
+    news_search_timeout_seconds: float = 8.0
+    dashboard_source_timeout_seconds: float = 8.0
+    dashboard_slow_source_timeout_seconds: float = 12.0
+    dashboard_optional_source_timeout_seconds: float = 6.0
     volcengine_api_key: str = ""
     volcengine_api_base: str = "https://ark.cn-beijing.volces.com/api/v3"
     volcengine_ocr_model: str = "doubao-seed-2-0-lite-260215"

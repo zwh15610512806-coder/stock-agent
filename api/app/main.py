@@ -6,6 +6,7 @@ from app.routers import ai, compat, etfs, macro, market, ocr, portfolio, sources
 from app.services.ai_reports import DeepSeekReportService
 from app.services.market import MarketDataService
 from app.services.ocr import DoubaoVisionOcrService, TencentOcrService
+from app.services.stock_insights import StockInsightService
 
 
 def create_app() -> FastAPI:
@@ -19,11 +20,27 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.market_service = MarketDataService(cache_ttl_seconds=settings.market_cache_ttl_seconds)
+    app.state.market_service = MarketDataService(
+        cache_ttl_seconds=settings.market_cache_ttl_seconds,
+        news_search_api_key=settings.news_search_api_key or settings.openai_api_key,
+        news_search_api_base=settings.news_search_api_base,
+        news_search_model=settings.news_search_model,
+        news_search_timeout_seconds=settings.news_search_timeout_seconds,
+        dashboard_source_timeout_seconds=settings.dashboard_source_timeout_seconds,
+        dashboard_slow_source_timeout_seconds=settings.dashboard_slow_source_timeout_seconds,
+        dashboard_optional_source_timeout_seconds=settings.dashboard_optional_source_timeout_seconds,
+    )
     app.state.ai_report_service = DeepSeekReportService(
         api_key=settings.deepseek_api_key,
         api_base=settings.deepseek_api_base,
         model=settings.deepseek_model,
+    )
+    app.state.stock_insight_service = StockInsightService(
+        api_key=settings.news_search_api_key or settings.openai_api_key,
+        api_base=settings.news_search_api_base,
+        model=settings.news_search_model,
+        timeout_seconds=settings.news_search_timeout_seconds,
+        market_service=app.state.market_service,
     )
     tencent_ocr_service = TencentOcrService(
         secret_id=settings.tencentcloud_secret_id,

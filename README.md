@@ -44,13 +44,21 @@ npm run dev
 - `TENCENTCLOUD_REGION`: 默认 `ap-guangzhou`。
 - `TENCENTCLOUD_OCR_ENDPOINT`: 默认 `ocr.tencentcloudapi.com`。
 - `MARKET_CACHE_TTL_SECONDS`: 后端行情与仪表盘缓存秒数。
+- `DASHBOARD_SOURCE_TIMEOUT_SECONDS`: 可选。市场看板普通免费源超时秒数，默认 `8`。
+- `DASHBOARD_SLOW_SOURCE_TIMEOUT_SECONDS`: 可选。市场看板慢速免费源超时秒数，默认 `12`。
+- `DASHBOARD_OPTIONAL_SOURCE_TIMEOUT_SECONDS`: 可选。市场看板可选免费源超时秒数，默认 `6`。
+- `OPENAI_API_KEY`: 可选。填写后 7x24 快讯会优先通过 OpenAI Responses API 的联网搜索工具补充可点击来源链接。
+- `NEWS_SEARCH_API_KEY`: 可选。仅用于快讯联网搜索的密钥；为空时复用 `OPENAI_API_KEY`。
+- `NEWS_SEARCH_API_BASE`: 可选。默认 `https://api.openai.com/v1`。
+- `NEWS_SEARCH_MODEL`: 可选。默认 `gpt-4.1-mini`。
+- `NEWS_SEARCH_TIMEOUT_SECONDS`: 可选。快讯联网搜索超时秒数，默认 `8`。
 - `VITE_API_BASE`: 可选前端本地开发 API 地址，Docker 同域部署时保持空值。
 
 ## 数据源
 
 当前策略是“免费优先 + A 股优先”，不接券商自动登录或同步。
 
-- 市场页：A 股成交额优先使用 AKShare `stock_sse_summary` + `stock_szse_summary` 的交易所总貌口径；指数报价复用腾讯免费行情、AKShare 和 Yahoo Chart。
+- 市场页：A 股成交额优先使用 AKShare `stock_sse_summary` + `stock_szse_summary` 的交易所总貌口径；指数报价复用腾讯免费行情、AKShare 和 Yahoo Chart；7x24 快讯在配置模型密钥后优先使用联网搜索补充可溯源链接，失败或未配置时回退到 AKShare 快讯与 SQLite 快照缓存。
 - 宏观页：`/api/macro/dashboard` 使用 AKShare 的 LPR、CPI、GDP、PMI、新增人民币贷款、中美国债收益率和 BOC 汇率。
 - 选股页：`/api/stocks/screener` 使用 AKShare `stock_zh_a_spot_em` 做 A 股筛选；`/api/symbols/search` 保留静态核心清单并扩展 A 股完整股票池缓存。
 - ETF 页：`/api/etfs/search` 和 `/api/etfs/candles` 使用 AKShare `fund_etf_spot_em`、`fund_etf_hist_em`。

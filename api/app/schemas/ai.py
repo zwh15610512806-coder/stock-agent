@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -34,4 +35,34 @@ class AiReportResponse(BaseModel):
     risks: list[str]
     model: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    disclaimer: str
+
+
+class StockInsightRequest(BaseModel):
+    position: PortfolioPosition
+    horizon_days: int = Field(default=30, ge=5, le=90)
+
+
+class StockInsightCitation(BaseModel):
+    title: str
+    url: str
+    source: str = ""
+    published_at: datetime | None = None
+
+
+class StockInsightResponse(BaseModel):
+    status: Literal["completed", "partial", "unavailable", "failed"]
+    symbol: str
+    market: MarketCode
+    as_of: datetime
+    quote: QuoteSnapshot | None = None
+    candles: list[CandleSnapshot] = Field(default_factory=list)
+    summary: str
+    trend: list[str] = Field(default_factory=list)
+    financials: list[str] = Field(default_factory=list)
+    events: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    citations: list[StockInsightCitation] = Field(default_factory=list)
+    data_warnings: list[str] = Field(default_factory=list)
+    model: str
     disclaimer: str

@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -8,22 +9,63 @@ import {
   RefreshCw,
   Trophy,
 } from "lucide-react";
-import { Heatmap } from "../components/Heatmap";
+import { Heatmap, type HeatmapAreaMetric } from "../components/Heatmap";
 import { SourceStatusBadge } from "../components/SourceStatusBadge";
 import { api } from "../lib/api";
 import { formatCompact, formatMoney, formatNumber, toneForPct } from "../lib/format";
 import type {
   AShareActivity,
+  CandleSnapshot,
   CommodityQuote,
   DragonTigerItem,
   DashboardCacheStatus,
-  DashboardSourceStatus,
+  DashboardHeatItem,
   FundFlowSummary,
   MarketNewsItem,
   QuoteSnapshot,
 } from "../lib/types";
 
+type HeatmapGroupKey = "etf" | "industry" | "sector" | "concept" | "region";
+type DragonTigerSortKey = "net_inflow" | "net_outflow" | "rise_pct" | "fall_pct" | "turnover";
+
+const HEATMAP_GROUP_ORDER: HeatmapGroupKey[] = ["etf", "industry", "sector", "region", "concept"];
+
+const HEATMAP_TABS: Array<{ label: string; group: HeatmapGroupKey }> = [
+  { label: "ETF", group: "etf" },
+  { label: "大类行业", group: "industry" },
+  { label: "细分行业", group: "sector" },
+  { label: "地域", group: "region" },
+  { label: "概念", group: "concept" },
+];
+
+const HEATMAP_GROUP_LABELS: Record<HeatmapGroupKey, string> = {
+  etf: "ETF",
+  industry: "大类行业",
+  sector: "细分行业",
+  concept: "概念",
+  region: "地域",
+};
+
+const HEATMAP_METRIC_OPTIONS: Array<{ value: HeatmapAreaMetric; label: string }> = [
+  { value: "turnover", label: "成交额" },
+  { value: "net_amount", label: "净流入" },
+  { value: "change_pct", label: "涨跌幅" },
+];
+
+const HEATMAP_LIMIT_OPTIONS = [30, 60, 120];
+
+const DRAGON_TIGER_SORT_OPTIONS: Array<{ value: DragonTigerSortKey; label: string }> = [
+  { value: "net_inflow", label: "净流入" },
+  { value: "net_outflow", label: "净流出" },
+  { value: "rise_pct", label: "上涨%" },
+  { value: "fall_pct", label: "下跌%" },
+  { value: "turnover", label: "成交额" },
+];
+
 export function MarketPage() {
+  const [heatmapGroup, setHeatmapGroup] = useState<HeatmapGroupKey>("industry");
+  const [heatmapMetric, setHeatmapMetric] = useState<HeatmapAreaMetric>("turnover");
+  const [heatmapLimit, setHeatmapLimit] = useState(60);
   const dashboard = useQuery({
     queryKey: ["market-dashboard", "reference-overview"],
     queryFn: () => api.marketDashboard(["CN", "HK", "US"], "daily"),
@@ -33,14 +75,31 @@ export function MarketPage() {
   const indexQuotes = data?.markets.flatMap((market) => market.indices) || [];
   const aShare = data?.markets.find((market) => market.market === "CN");
   const aShareTurnover = data?.a_share_turnover;
-  const heatmapData = [
-    ...(data?.industry_heatmap || []),
-    ...(data?.concept_heatmap || []),
-    ...(data?.region_heatmap || []),
-  ];
+  const heatmapBuckets = useMemo<Record<HeatmapGroupKey, DashboardHeatItem[]>>(
+    () => ({
+      etf: data?.etf_heatmap || [],
+      industry: data?.industry_heatmap || [],
+      sector: data?.sector_heatmap || [],
+      concept: data?.concept_heatmap || [],
+      region: data?.region_heatmap || [],
+    }),
+    [data?.concept_heatmap, data?.etf_heatmap, data?.industry_heatmap, data?.region_heatmap, data?.sector_heatmap],
+  );
+  const activeHeatmapGroup =
+    heatmapBuckets[heatmapGroup].length > 0
+      ? heatmapGroup
+      : HEATMAP_GROUP_ORDER.find((group) => heatmapBuckets[group].length > 0) || heatmapGroup;
+  const activeHeatmapData = heatmapBuckets[activeHeatmapGroup];
+  const selectedHeatmapData = useMemo(
+    () =>
+      [...activeHeatmapData]
+        .sort((left, right) => heatmapSortValue(right, heatmapMetric) - heatmapSortValue(left, heatmapMetric))
+        .slice(0, heatmapLimit),
+    [activeHeatmapData, heatmapLimit, heatmapMetric],
+  );
   const sourceWarning = isInitialLoading
     ? ""
-    : marketSourceWarning(dashboard.isError, data?.cache_status, data?.source_status || []);
+    : marketSourceWarning(dashboard.isError, data?.cache_status);
 
   return (
     <div className="market-overview-board">
@@ -116,18 +175,69 @@ export function MarketPage() {
       </section>
 
       <section className="market-block heatmap-board">
-        <SectionTitle icon={Flame} title="板块热力图" subtitle="行业、概念、地域资金流合并视图" />
+        <div className="heatmap-board-head">
+          <div className="heatmap-title-copy">
+            <div>
+              <Flame size={16} />
+              <h3>板块热力图</h3>
+            </div>
+            <span>
+              {HEATMAP_GROUP_LABELS[activeHeatmapGroup]} · 盘中聚合 {formatShortDate(data?.as_of)}
+            </span>
+          </div>
+          <div className="heatmap-controls" aria-label="板块热力图控制">
+            <select
+              aria-label="热力图面积指标"
+              className="heatmap-select"
+              value={heatmapMetric}
+              onChange={(event) => setHeatmapMetric(event.target.value as HeatmapAreaMetric)}
+            >
+              {HEATMAP_METRIC_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="热力图显示数量"
+              className="heatmap-select compact"
+              value={heatmapLimit}
+              onChange={(event) => setHeatmapLimit(Number(event.target.value))}
+            >
+              {HEATMAP_LIMIT_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  显示 {option}
+                </option>
+              ))}
+            </select>
+            <div className="heatmap-tabs" role="tablist" aria-label="板块分类">
+              {HEATMAP_TABS.map((tab) => {
+                const enabled = heatmapBuckets[tab.group].length > 0;
+                const active = tab.group === activeHeatmapGroup;
+                return (
+                  <button
+                    aria-selected={active}
+                    className={active ? "active" : ""}
+                    disabled={!enabled}
+                    key={tab.label}
+                    onClick={() => setHeatmapGroup(tab.group)}
+                    role="tab"
+                    type="button"
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
         {isInitialLoading ? (
           <MarketLoading title="正在加载板块热力" />
-        ) : heatmapData.length ? (
+        ) : selectedHeatmapData.length ? (
           <>
-            <Heatmap data={heatmapData} />
-            <div className="heat-chip-row">
-              {heatmapData.slice(0, 10).map((item) => (
-                <span key={`${item.source}-${item.name}`} className={`heat-chip tone-text ${toneForPct(item.change_pct)}`}>
-                  {item.name} {formatNumber(item.change_pct, 2)}%
-                </span>
-              ))}
+            <Heatmap data={selectedHeatmapData} areaMetric={heatmapMetric} displayLimit={heatmapLimit} />
+            <div className="heatmap-count">
+              已显示 {selectedHeatmapData.length}（共 {activeHeatmapData.length}）
             </div>
           </>
         ) : (
@@ -141,7 +251,7 @@ export function MarketPage() {
           {isInitialLoading ? <MarketLoading title="正在加载商品行情" /> : <CommodityPanel quotes={data?.commodity_quotes || []} />}
         </section>
         <section className="market-block">
-          <SectionTitle icon={Trophy} title="龙虎榜" subtitle="最近交易日净买额排行" />
+          <SectionTitle icon={Trophy} title="龙虎榜" subtitle="最近交易日多指标排行" />
           {isInitialLoading ? <MarketLoading title="正在加载龙虎榜" /> : <DragonTigerList items={data?.dragon_tiger || []} />}
         </section>
       </div>
@@ -277,15 +387,53 @@ function NewsTimeline({ news }: { news: MarketNewsItem[] }) {
   if (!news.length) {
     return <MarketEmpty title="暂无真实快讯" />;
   }
+  const sortedNews = [...news].sort((left, right) => {
+    const leftTime = parseNewsDate(left.published_at)?.getTime() || 0;
+    const rightTime = parseNewsDate(right.published_at)?.getTime() || 0;
+    return rightTime - leftTime;
+  });
+  const latest = parseNewsDate(sortedNews[0]?.published_at) || new Date();
+  const start = new Date(latest.getTime() - 24 * 60 * 60 * 1000);
   return (
-    <div className="news-timeline">
-      {news.slice(0, 8).map((item) => (
-        <a href={item.url || undefined} key={`${item.published_at}-${item.title}`} target={item.url ? "_blank" : undefined} rel="noreferrer">
-          <time>{formatNewsTime(item.published_at)}</time>
-          <strong>{item.title}</strong>
-          <span>{item.content || item.source}</span>
-        </a>
-      ))}
+    <div className="news-live-panel">
+      <div className="news-live-meta">
+        <span>近24小时</span>
+        <span>已加载 {sortedNews.length} 条</span>
+      </div>
+      <NewsTimeAxis start={start} end={latest} latest={latest} />
+      <div className="news-timeline">
+        {sortedNews.slice(0, 12).map((item) => (
+          <a href={item.url || undefined} key={`${item.published_at}-${item.title}-${item.url}`} target={item.url ? "_blank" : undefined} rel="noreferrer">
+            <time>{formatNewsTime(item.published_at)}</time>
+            <span className="news-source-pill">{item.source}</span>
+            <strong>{item.title}</strong>
+            <span>{item.content || item.source}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NewsTimeAxis({ start, end, latest }: { start: Date; end: Date; latest: Date }) {
+  const ticks = buildTimelineTicks(start, end);
+  return (
+    <div className="news-axis" aria-label="近24小时快讯时间轴">
+      <div className="news-axis-head">
+        <span>{formatAxisDate(start)}</span>
+        <span>{formatAxisDate(end)}</span>
+      </div>
+      <div className="news-axis-track">
+        <span className="news-axis-fill" />
+        <span className="news-axis-latest" style={{ left: `${newsPositionPct(latest, start, end)}%` }}>
+          最新资讯
+        </span>
+      </div>
+      <div className="news-axis-ticks">
+        {ticks.map((tick) => (
+          <span key={tick.toISOString()}>{formatAxisTime(tick)}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -317,27 +465,129 @@ function CommodityPanel({ quotes }: { quotes: CommodityQuote[] }) {
 }
 
 function DragonTigerList({ items }: { items: DragonTigerItem[] }) {
+  const [sortKey, setSortKey] = useState<DragonTigerSortKey>("net_inflow");
+  const rows = useMemo(() => sortDragonTigerItems(items, sortKey).slice(0, 10), [items, sortKey]);
+
   if (!items.length) {
     return <MarketEmpty title="暂无真实龙虎榜" />;
   }
   return (
-    <div className="dragon-list">
-      {items.slice(0, 10).map((item, index) => (
-        <div className="dragon-row" key={`${item.trade_date}-${item.symbol}`}>
-          <span className="rank-number">{index + 1}</span>
-          <div>
-            <strong>{item.name}</strong>
-            <span>{item.symbol} · {item.reason || item.trade_date}</span>
-          </div>
-          <div>
-            <strong>{formatNumber(item.close, 2)}</strong>
-            <span className={`tone-text ${toneForPct(item.change_pct)}`}>{formatSignedPct(item.change_pct)}</span>
-          </div>
-          <span className={item.net_amount >= 0 ? "tone-red" : "tone-green"}>{formatMoney(item.net_amount)}</span>
+    <div className="dragon-panel">
+      <div className="dragon-tabs" aria-label="龙虎榜排序">
+        {DRAGON_TIGER_SORT_OPTIONS.map((option) => (
+          <button
+            aria-pressed={sortKey === option.value}
+            className={sortKey === option.value ? "active" : ""}
+            key={option.value}
+            onClick={() => setSortKey(option.value)}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {rows.length ? (
+        <div className="dragon-list">
+          {rows.map((item, index) => {
+            const changeTone = toneForPct(item.change_pct);
+            const netTone = item.net_amount >= 0 ? "tone-red" : "tone-green";
+            return (
+              <div className="dragon-row" data-testid="dragon-row" key={`${item.trade_date}-${item.symbol}-${index}`}>
+                <span className="rank-number">{index + 1}</span>
+                <div className="dragon-main">
+                  <strong>{item.name}</strong>
+                  <span>{item.symbol} · {item.reason || item.trade_date}</span>
+                </div>
+                <div className="dragon-side">
+                  <span className="dragon-sector">{item.sector || "--"}</span>
+                  <MiniKline item={item} />
+                </div>
+                <div className="dragon-metrics">
+                  <div className={`dragon-metric ${sortKey === "rise_pct" || sortKey === "fall_pct" ? "active" : ""}`}>
+                    <span>收盘/涨跌</span>
+                    <strong>{formatNumber(item.close, 2)}</strong>
+                    <small className={`tone-text ${changeTone}`}>{formatSignedPct(item.change_pct)}</small>
+                  </div>
+                  <div className={`dragon-metric ${sortKey === "net_inflow" || sortKey === "net_outflow" ? "active" : ""}`}>
+                    <span>净买额</span>
+                    <strong className={netTone}>{formatMoney(item.net_amount)}</strong>
+                  </div>
+                  <div className={`dragon-metric ${sortKey === "turnover" ? "active" : ""}`}>
+                    <span>成交额</span>
+                    <strong>{formatDragonTurnover(item.turnover)}</strong>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
-      ))}
+      ) : (
+        <MarketEmpty title="当前排序暂无真实龙虎榜" compact />
+      )}
     </div>
   );
+}
+
+function MiniKline({ item }: { item: DragonTigerItem }) {
+  const candles = (item.mini_candles || []).filter(isDrawableCandle).slice(-20);
+  if (!candles.length) {
+    return (
+      <div className="mini-kline-empty" data-testid="mini-kline-empty">
+        暂无K线
+      </div>
+    );
+  }
+
+  const width = 104;
+  const height = 34;
+  const padding = 3;
+  const minLow = Math.min(...candles.map((candle) => candle.low));
+  const maxHigh = Math.max(...candles.map((candle) => candle.high));
+  const range = Math.max(maxHigh - minLow, 0.01);
+  const candleSlot = (width - padding * 2) / candles.length;
+  const candleWidth = Math.max(2, Math.min(5, candleSlot * 0.56));
+  const yFor = (value: number) => padding + ((maxHigh - value) / range) * (height - padding * 2);
+
+  return (
+    <svg
+      aria-label={`${item.name}近20日日K缩略图`}
+      className="mini-kline"
+      data-testid="mini-kline"
+      role="img"
+      viewBox={`0 0 ${width} ${height}`}
+    >
+      {candles.map((candle, index) => {
+        const x = padding + candleSlot * index + candleSlot / 2;
+        const openY = yFor(candle.open);
+        const closeY = yFor(candle.close);
+        const bodyTop = Math.min(openY, closeY);
+        const bodyHeight = Math.max(1.4, Math.abs(closeY - openY));
+        const tone = candle.close >= candle.open ? "up" : "down";
+        return (
+          <g key={`${candle.date}-${index}`}>
+            <line
+              className={`mini-candle-wick ${tone}`}
+              x1={x}
+              x2={x}
+              y1={yFor(candle.high)}
+              y2={yFor(candle.low)}
+            />
+            <rect
+              className={`mini-candle-body ${tone}`}
+              height={bodyHeight}
+              width={candleWidth}
+              x={x - candleWidth / 2}
+              y={bodyTop}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function isDrawableCandle(candle: CandleSnapshot): boolean {
+  return [candle.open, candle.high, candle.low, candle.close].every((value) => Number.isFinite(value) && value > 0);
 }
 
 function MarketEmpty({ title, compact = false }: { title: string; compact?: boolean }) {
@@ -361,7 +611,6 @@ function MarketLoading({ title, compact = false }: { title: string; compact?: bo
 function marketSourceWarning(
   isError: boolean,
   cacheStatus?: DashboardCacheStatus,
-  statuses: DashboardSourceStatus[] = [],
 ): string {
   if (isError) {
     return "后端 API 暂不可用；请确认 FastAPI 已在 8000 端口运行。";
@@ -372,10 +621,56 @@ function marketSourceWarning(
   if (cacheStatus === "stale") {
     return "部分免费数据源超时，页面正在展示可用真实来源和 SQLite 最近缓存。";
   }
-  if (cacheStatus === "partial" || statuses.some((status) => status.status === "unavailable")) {
+  if (cacheStatus === "partial") {
     return "部分免费数据源暂不可用，页面已保留可用真实来源，不展示模拟数据。";
   }
   return "";
+}
+
+function heatmapSortValue(item: DashboardHeatItem, metric: HeatmapAreaMetric): number {
+  if (metric === "net_amount") {
+    return Math.abs(item.net_amount || 0);
+  }
+  if (metric === "change_pct") {
+    return Math.abs(item.change_pct || 0);
+  }
+  return item.turnover || 0;
+}
+
+function sortDragonTigerItems(items: DragonTigerItem[], sortKey: DragonTigerSortKey): DragonTigerItem[] {
+  const filtered = items.filter((item) => {
+    if (sortKey === "rise_pct") {
+      return item.change_pct > 0;
+    }
+    if (sortKey === "fall_pct") {
+      return item.change_pct < 0;
+    }
+    return true;
+  });
+
+  return [...filtered].sort((left, right) => {
+    if (sortKey === "net_outflow") {
+      return left.net_amount - right.net_amount || right.turnover - left.turnover;
+    }
+    if (sortKey === "rise_pct") {
+      return right.change_pct - left.change_pct || right.net_amount - left.net_amount;
+    }
+    if (sortKey === "fall_pct") {
+      return left.change_pct - right.change_pct || left.net_amount - right.net_amount;
+    }
+    if (sortKey === "turnover") {
+      return dragonTurnoverSortValue(right) - dragonTurnoverSortValue(left) || right.net_amount - left.net_amount;
+    }
+    return right.net_amount - left.net_amount || right.turnover - left.turnover;
+  });
+}
+
+function dragonTurnoverSortValue(item: DragonTigerItem): number {
+  return item.turnover > 0 ? item.turnover : Number.NEGATIVE_INFINITY;
+}
+
+function formatDragonTurnover(value: number): string {
+  return value > 0 ? formatMoney(value) : "--";
 }
 
 function formatTrillion(value: number): string {
@@ -404,11 +699,63 @@ function formatDateTime(value?: string | null): string {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
-function formatNewsTime(value?: string | null): string {
+function formatShortDate(value?: string | null): string {
   if (!value) {
+    return "--";
+  }
+  return new Date(value).toLocaleDateString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+function formatNewsTime(value?: string | null): string {
+  const parsed = parseNewsDate(value);
+  if (!parsed) {
     return "--:--";
   }
-  return new Date(value).toLocaleTimeString("zh-CN", {
+  return parsed.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function parseNewsDate(value?: string | null): Date | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function buildTimelineTicks(start: Date, end: Date): Date[] {
+  const ticks: Date[] = [];
+  const step = (end.getTime() - start.getTime()) / 6;
+  for (let index = 1; index < 6; index += 1) {
+    ticks.push(new Date(start.getTime() + step * index));
+  }
+  return ticks;
+}
+
+function newsPositionPct(value: Date, start: Date, end: Date): number {
+  const total = Math.max(1, end.getTime() - start.getTime());
+  return Math.max(0, Math.min(100, ((value.getTime() - start.getTime()) / total) * 100));
+}
+
+function formatAxisDate(value: Date): string {
+  return value.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatAxisTime(value: Date): string {
+  return value.toLocaleTimeString("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

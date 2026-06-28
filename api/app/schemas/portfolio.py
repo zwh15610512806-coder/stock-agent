@@ -14,6 +14,14 @@ class PortfolioPosition(BaseModel):
     cost_price: float = Field(ge=0)
     current_price: float = Field(ge=0)
     currency: str
+    available_quantity: float | None = Field(default=None, ge=0)
+    market_value: float | None = Field(default=None, ge=0)
+    cost_value: float | None = Field(default=None, ge=0)
+    pnl: float | None = None
+    pnl_pct: float | None = None
+    source: str | None = None
+    source_snapshot_at: datetime | None = None
+    raw_fields: dict[str, str] = Field(default_factory=dict)
 
 
 class PortfolioPositionAnalysis(PortfolioPosition):

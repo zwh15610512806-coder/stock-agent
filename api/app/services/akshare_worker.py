@@ -33,10 +33,14 @@ def _run_operation(service: MarketDataService, operation: str, args: list[str]) 
         return service._fetch_a_share_activity_sync()
     if operation == "industry_heatmap":
         return service._fetch_fund_flow_heatmap_sync("industry")
+    if operation == "sector_heatmap":
+        return service._fetch_sector_heatmap_sync()
     if operation == "concept_heatmap":
         return service._fetch_fund_flow_heatmap_sync("concept")
     if operation == "region_heatmap":
         return service._fetch_region_heatmap_sync()
+    if operation == "etf_heatmap":
+        return service._fetch_etf_heatmap_sync()
     if operation == "fund_flow_summary":
         return service._fetch_fund_flow_summary_sync()
     if operation == "market_news":

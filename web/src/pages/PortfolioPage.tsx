@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { FileUp, Plus, Trash2, UploadCloud } from "lucide-react";
+import { Bot, FileUp, Plus, Trash2, UploadCloud } from "lucide-react";
 import { MetricCard } from "../components/MetricCard";
 import { api, apiFailureMessage } from "../lib/api";
 import { parsePositionsCsv } from "../lib/csv";
@@ -20,15 +20,26 @@ export function PortfolioPage() {
     current_price: 1200,
     currency: "CNY",
   });
+  const [ocrSyncNotice, setOcrSyncNotice] = useState("");
+  const [insightTarget, setInsightTarget] = useState<PortfolioPosition | null>(null);
   const analysis = useQuery({
     queryKey: ["portfolio-analysis", positions],
     queryFn: () => api.analyzePortfolio(positions),
+  });
+  const insightMutation = useMutation({
+    mutationFn: (position: PortfolioPosition) => api.stockInsight({ position, horizon_days: 30 }),
   });
   const ocrMutation = useMutation({
     mutationFn: (file: File) => api.uploadOcr(file),
     onSuccess: (result) => {
       if (result.positions.length) {
-        setPositions([...positions, ...result.positions]);
+        const syncResult = syncOcrPositionsBySymbol(positions, result.positions);
+        setPositions(syncResult.positions);
+        setOcrSyncNotice(
+          `已同步 ${result.positions.length} 条持仓，更新 ${syncResult.updated} 条，新增 ${syncResult.added} 条，保留 ${syncResult.preserved} 条本地持仓。`,
+        );
+      } else {
+        setOcrSyncNotice("");
       }
     },
   });
@@ -44,14 +55,24 @@ export function PortfolioPage() {
     if (!ocrMutation.data) {
       return "";
     }
+    if (ocrMutation.data.positions.length) {
+      return ocrSyncNotice || `已同步 ${ocrMutation.data.positions.length} 条持仓。`;
+    }
     if (ocrMutation.data.message) {
       return ocrMutation.data.message;
     }
-    if (ocrMutation.data.positions.length) {
-      return `OCR 已导入 ${ocrMutation.data.positions.length} 条持仓草稿。`;
-    }
     return "OCR 未识别到可用持仓，请换一张更清晰的券商持仓截图。";
-  }, [ocrMutation.data, ocrMutation.error, ocrMutation.isError, ocrMutation.isPending]);
+  }, [ocrMutation.data, ocrMutation.error, ocrMutation.isError, ocrMutation.isPending, ocrSyncNotice]);
+  const ocrRawPreview = useMemo(() => {
+    if (!ocrMutation.data || ocrMutation.data.positions.length || !ocrMutation.data.raw_lines?.length) {
+      return "";
+    }
+    return ocrMutation.data.raw_lines
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, 1200);
+  }, [ocrMutation.data]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -73,6 +94,11 @@ export function PortfolioPage() {
       ocrMutation.mutate(file);
     }
     event.target.value = "";
+  }
+
+  function analyzePosition(position: PortfolioPosition) {
+    setInsightTarget(position);
+    insightMutation.mutate(position);
   }
 
   return (
@@ -173,6 +199,12 @@ export function PortfolioPage() {
             </button>
           </form>
           {ocrNotice ? <p className="notice-text portfolio-notice">{ocrNotice}</p> : null}
+          {ocrRawPreview ? (
+            <details className="portfolio-ocr-raw" open>
+              <summary>AI 原始识别结果</summary>
+              <pre>{ocrRawPreview}</pre>
+            </details>
+          ) : null}
         </section>
 
         <section className="data-panel portfolio-risk-panel">
@@ -217,8 +249,12 @@ export function PortfolioPage() {
                 <th>名称</th>
                 <th>市场</th>
                 <th>数量</th>
+                <th>可用</th>
                 <th>成本价</th>
                 <th>现价</th>
+                <th>市值</th>
+                <th>浮盈</th>
+                <th>盈亏率</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -229,9 +265,16 @@ export function PortfolioPage() {
                   <td>{position.name}</td>
                   <td>{position.market}</td>
                   <td>{formatNumber(position.quantity, 0)}</td>
+                  <td>{formatOptionalNumber(position.available_quantity, 0)}</td>
                   <td>{formatNumber(position.cost_price)}</td>
                   <td>{formatNumber(position.current_price)}</td>
+                  <td>{formatOptionalNumber(position.market_value)}</td>
+                  <td className={`tone-text ${toneForOptional(position.pnl)}`}>{formatOptionalNumber(position.pnl)}</td>
+                  <td className={`tone-text ${toneForOptional(position.pnl_pct)}`}>{formatOptionalPct(position.pnl_pct)}</td>
                   <td>
+                    <button className="icon-action" onClick={() => analyzePosition(position)} aria-label={`AI分析 ${position.name || position.symbol}`}>
+                      <Bot size={15} />
+                    </button>
                     <button className="icon-action" onClick={() => removePosition(position.symbol)} aria-label="删除持仓">
                       <Trash2 size={15} />
                     </button>
@@ -242,6 +285,112 @@ export function PortfolioPage() {
           </table>
         </div>
       </section>
+
+      {insightTarget ? (
+        <section className="data-panel portfolio-insight-panel">
+          <div className="panel-head portfolio-panel-head portfolio-insight-head">
+            <div>
+              <h3>{insightTarget.name || insightTarget.symbol} AI分析</h3>
+              <span>{insightMutation.data ? `${insightMutation.data.status} / ${insightMutation.data.model}` : "联网获取最近30天走势、财报与公告"}</span>
+            </div>
+            <Bot size={18} />
+          </div>
+          {insightMutation.isPending ? <p className="notice-text portfolio-notice">正在联网分析 {insightTarget.symbol}...</p> : null}
+          {insightMutation.isError ? <p className="notice-text portfolio-notice">{apiFailureMessage(insightMutation.error, "AI分析")}</p> : null}
+          {insightMutation.data ? (
+            <div className="portfolio-insight-body">
+              <div className={`report-status ${insightMutation.data.status}`}>{insightMutation.data.summary}</div>
+              <InsightList title="30日走势" items={insightMutation.data.trend} />
+              <InsightList title="财报要点" items={insightMutation.data.financials} />
+              <InsightList title="重要事件" items={insightMutation.data.events} />
+              <InsightList title="风险提示" items={insightMutation.data.risks} warn />
+              {insightMutation.data.data_warnings.length ? (
+                <div className="portfolio-insight-warnings">
+                  {insightMutation.data.data_warnings.map((warning) => (
+                    <p className="notice-text portfolio-notice" key={warning}>
+                      {warning}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              {insightMutation.data.citations.length ? (
+                <div className="portfolio-insight-citations">
+                  <h4>来源</h4>
+                  {insightMutation.data.citations.map((citation) => (
+                    <a href={citation.url} key={`${citation.url}-${citation.title}`} rel="noreferrer" target="_blank">
+                      {citation.title}
+                      {citation.source ? <span>{citation.source}</span> : null}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+              <p className="notice-text">{insightMutation.data.disclaimer}</p>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
+}
+
+function InsightList({ title, items, warn = false }: { title: string; items: string[]; warn?: boolean }) {
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="portfolio-insight-list">
+      <h4>{title}</h4>
+      {items.map((item) => (
+        <span className={`pill${warn ? " warn" : ""}`} key={item}>
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function syncOcrPositionsBySymbol(current: PortfolioPosition[], incoming: PortfolioPosition[]) {
+  const currentSymbols = new Set(current.map((item) => normalizePortfolioSymbol(item.symbol)));
+  const incomingSymbols = new Set<string>();
+  const syncedIncoming: PortfolioPosition[] = [];
+  let updated = 0;
+  let added = 0;
+
+  for (const position of incoming) {
+    const symbol = normalizePortfolioSymbol(position.symbol);
+    if (incomingSymbols.has(symbol)) {
+      continue;
+    }
+    incomingSymbols.add(symbol);
+    syncedIncoming.push({ ...position, symbol });
+    if (currentSymbols.has(symbol)) {
+      updated += 1;
+    } else {
+      added += 1;
+    }
+  }
+
+  const preservedPositions = current.filter((position) => !incomingSymbols.has(normalizePortfolioSymbol(position.symbol)));
+  return {
+    positions: [...syncedIncoming, ...preservedPositions],
+    updated,
+    added,
+    preserved: preservedPositions.length,
+  };
+}
+
+function normalizePortfolioSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase();
+}
+
+function formatOptionalNumber(value: number | null | undefined, digits = 2): string {
+  return typeof value === "number" && Number.isFinite(value) ? formatNumber(value, digits) : "--";
+}
+
+function formatOptionalPct(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${formatNumber(value * 100)}%` : "--";
+}
+
+function toneForOptional(value: number | null | undefined): "up" | "down" | "neutral" {
+  return typeof value === "number" && Number.isFinite(value) ? toneForPct(value) : "neutral";
 }

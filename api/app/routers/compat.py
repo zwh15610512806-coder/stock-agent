@@ -9,7 +9,7 @@ from app.services.etfs import ETFService
 from app.services.macro import MacroDataService
 from app.services.market import INDEX_SYMBOLS, MarketDataService
 from app.services.stocks import StockScreenerService
-from app.services.symbols import STATIC_SYMBOLS, _a_share_pool, normalize_symbol, search_static_symbols
+from app.services.symbols import STATIC_SYMBOLS, _a_share_pool, normalize_symbol, resolve_symbol_query, search_static_symbols
 
 router = APIRouter(prefix="/api", tags=["compat"])
 
@@ -489,7 +489,7 @@ def _static_symbol_matches(query: str, markets: set[MarketCode], limit: int) -> 
 
 def _requested_symbols(symbols: str, group: str) -> list[str]:
     if symbols.strip():
-        return [normalize_symbol(item, None) for item in symbols.split(",") if item.strip()]
+        return [resolve_symbol_query(item, None) for item in symbols.split(",") if item.strip()]
     return INDEX_GROUPS.get(group, INDEX_GROUPS["indices-all"])
 
 

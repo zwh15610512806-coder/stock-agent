@@ -91,6 +91,21 @@ def search_static_symbols(
     return matches
 
 
+def resolve_symbol_query(query: str, markets: set[MarketCode] | None = None) -> str:
+    raw_term = query.strip()
+    if not raw_term:
+        return ""
+    static_match = _first_static_symbol_match(raw_term, markets)
+    if static_match is not None:
+        return static_match.symbol
+    if raw_term.isdigit() and len(raw_term) == 6 and _market_allowed("CN", markets):
+        return normalize_symbol(raw_term, "CN")
+    if _looks_like_symbol_query(raw_term):
+        return normalize_symbol(raw_term, None)
+    matches = search_static_symbols(raw_term, markets)
+    return matches[0].symbol if matches else normalize_symbol(raw_term, None)
+
+
 def display_name_for_symbol(symbol: str) -> str:
     normalized = normalize_symbol(symbol, None)
     for item in STATIC_SYMBOLS:
@@ -178,6 +193,27 @@ def _import_akshare() -> object | None:
 def _a_share_pool_cache_key(module: object) -> tuple[int, str]:
     module_type = type(module)
     return id(module), f"{module_type.__module__}.{module_type.__qualname__}"
+
+
+def _first_static_symbol_match(query: str, markets: set[MarketCode] | None) -> SymbolSearchResult | None:
+    raw_term = query.strip()
+    term = raw_term.upper()
+    for item in STATIC_SYMBOLS:
+        if markets and item.market not in markets:
+            continue
+        code = item.symbol.removesuffix(".SH").removesuffix(".SZ").removesuffix(".BJ").removesuffix(".HK")
+        if term in item.symbol.upper() or term in code.upper() or raw_term in item.name:
+            return item
+    return None
+
+
+def _market_allowed(market: MarketCode, markets: set[MarketCode] | None) -> bool:
+    return markets is None or market in markets
+
+
+def _looks_like_symbol_query(query: str) -> bool:
+    allowed_punctuation = {".", "-", "^"}
+    return all(char.isascii() and (char.isalnum() or char in allowed_punctuation) for char in query.strip())
 
 
 def _normalize_a_share_pool_code(code: str) -> str:
