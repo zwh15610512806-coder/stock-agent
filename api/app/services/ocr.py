@@ -84,11 +84,17 @@ MAPPED_POSITION_KEYS = frozenset(
 NAME_IGNORE_TOKENS = {
     "同花顺",
     "同花顺APP",
+    "同花顺自选",
     "资产",
     "持仓",
+    "持仓股",
+    "自选股",
+    "汇总持仓",
     "可用",
     "成本",
     "现价",
+    "最新",
+    "涨幅",
     "市价",
     "市值",
     "参考市值",
@@ -98,12 +104,24 @@ NAME_IGNORE_TOKENS = {
     "证券",
     "代码",
     "名称",
+    "首页",
+    "行情",
+    "交易",
+    "资讯",
+    "理财",
+    "资金",
+    "分析",
 }
 
 
 def parse_position_text_lines(lines: list[str]) -> list[PortfolioPosition]:
     positions: list[PortfolioPosition] = []
     seen: set[str] = set()
+    for position in _watchlist_positions_from_lines(lines):
+        if position.symbol in seen:
+            continue
+        seen.add(position.symbol)
+        positions.append(position)
     for raw_line in [*lines, *_fragmented_line_candidates(lines)]:
         position = _position_from_text_line(raw_line)
         if position is None or position.symbol in seen:
@@ -113,6 +131,10 @@ def parse_position_text_lines(lines: list[str]) -> list[PortfolioPosition]:
     return positions
 
 
+def has_watchlist_fallback_positions(positions: list[PortfolioPosition]) -> bool:
+    return any(_position_raw_fields(position).get("识别类型") == "自选/行情列表" for position in positions)
+
+
 def no_position_message(lines: list[str]) -> str:
     text = "\n".join(line.strip() for line in lines if line.strip())
     if text and not SECURITY_HINT_RE.search(text) and not SYMBOL_RE.search(text):
@@ -120,6 +142,22 @@ def no_position_message(lines: list[str]) -> str:
     if text and not HOLDING_FIELD_RE.search(text):
         return "AI识别到了文字，但缺少持仓数量、成本价等必要字段。请上传包含证券代码、持仓数量、成本价的持仓明细截图。"
     return "AI 已返回识别结果，但未提取到可用持仓行。"
+
+
+def watchlist_position_message(positions: list[PortfolioPosition]) -> str:
+    count = sum(1 for position in positions if _position_raw_fields(position).get("识别类型") == "自选/行情列表")
+    if count <= 0:
+        return ""
+    return f"已从自选/行情列表识别 {count} 只股票；截图缺少持仓数量和成本价，已按数量 0、成本价等于最新价导入，请在表格中补充真实持仓。"
+
+
+def _position_raw_fields(position: Any) -> dict[str, str]:
+    if isinstance(position, PortfolioPosition):
+        return position.raw_fields
+    if isinstance(position, dict):
+        raw_fields = position.get("raw_fields")
+        return raw_fields if isinstance(raw_fields, dict) else {}
+    return {}
 
 
 def parse_ai_position_payload(content: str) -> list[PortfolioPosition]:
@@ -339,6 +377,79 @@ def _position_from_text_line(raw_line: str) -> PortfolioPosition | None:
         pnl_pct=pnl_pct,
         source="ocr",
     )
+
+
+def _watchlist_positions_from_lines(lines: list[str]) -> list[PortfolioPosition]:
+    cleaned = [line.strip() for line in lines if line.strip()]
+    positions: list[PortfolioPosition] = []
+    seen: set[str] = set()
+    for index, raw_name in enumerate(cleaned):
+        name = _watchlist_name(raw_name)
+        if not name:
+            continue
+        price = _single_price(cleaned[index + 1]) if index + 1 < len(cleaned) else None
+        if price is None:
+            continue
+        change_pct_text = cleaned[index + 2].strip() if index + 2 < len(cleaned) and _looks_like_percent(cleaned[index + 2]) else ""
+        symbol_text = _first_symbol_text(cleaned[index + 2 : index + 7])
+        if symbol_text is None:
+            continue
+        symbol = normalize_symbol(symbol_text, "CN" if symbol_text.isdigit() and len(symbol_text) == 6 else None)
+        if symbol in seen:
+            continue
+        market = infer_market(symbol)
+        raw_fields = {"识别类型": "自选/行情列表"}
+        if change_pct_text:
+            raw_fields["涨幅"] = change_pct_text
+        positions.append(
+            PortfolioPosition(
+                symbol=symbol,
+                name=name,
+                market=market,
+                quantity=0,
+                cost_price=price,
+                current_price=price,
+                currency=currency_for_market(market),
+                source="ocr-watchlist",
+                raw_fields=raw_fields,
+            )
+        )
+        seen.add(symbol)
+    return positions
+
+
+def _watchlist_name(line: str) -> str:
+    normalized = line.replace("，", " ").replace(",", " ").strip()
+    if not normalized or SYMBOL_RE.search(normalized) or _looks_like_percent(normalized) or _single_price(normalized) is not None:
+        return ""
+    token = _security_name_from_prefix(normalized)
+    if not token or token.upper() in NAME_IGNORE_TOKENS:
+        return ""
+    if len(token) > 12:
+        return ""
+    return token
+
+
+def _single_price(line: str) -> float | None:
+    stripped = line.strip().replace(",", "")
+    if not re.fullmatch(r"\d{1,5}(?:\.\d{1,4})?", stripped):
+        return None
+    value = _safe_float(stripped)
+    if value is None or value <= 0:
+        return None
+    return value
+
+
+def _looks_like_percent(line: str) -> bool:
+    return re.fullmatch(r"[+-]?\d{1,4}(?:\.\d+)?%[▼▲]?", line.strip()) is not None
+
+
+def _first_symbol_text(lines: list[str]) -> str | None:
+    for line in lines:
+        match = SYMBOL_RE.search(line.strip().upper())
+        if match:
+            return match.group("symbol").upper()
+    return None
 
 
 def _fragmented_line_candidates(lines: list[str]) -> list[str]:

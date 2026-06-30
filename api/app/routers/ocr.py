@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, Request, UploadFile
 
 from app.schemas.ocr import OcrPositionsResponse
-from app.services.ocr import DoubaoVisionOcrService, no_position_message
+from app.services.ocr import DoubaoVisionOcrService, has_watchlist_fallback_positions, no_position_message, watchlist_position_message
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
 
@@ -18,6 +18,8 @@ async def parse_positions(
         message = "AI OCR 未配置，请在后端环境变量中设置 VOLCENGINE_API_KEY。"
     elif status == "failed":
         message = "AI OCR 调用失败，请检查火山方舟 API Key、模型开通状态、网络或图片格式。"
+    elif positions and has_watchlist_fallback_positions(positions):
+        message = watchlist_position_message(positions)
     elif not positions:
         message = no_position_message(lines)
     return OcrPositionsResponse(status=status, positions=positions, raw_lines=lines, message=message)

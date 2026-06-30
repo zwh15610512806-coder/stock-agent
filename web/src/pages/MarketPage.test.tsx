@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
-import type { CandleSnapshot, MarketDashboardResponse } from "../lib/types";
+import type { MarketDashboardResponse } from "../lib/types";
 import { MarketPage } from "./MarketPage";
 
 vi.mock("../lib/api", () => ({
@@ -21,25 +21,6 @@ vi.mock("../components/Heatmap", () => ({
     </div>
   ),
 }));
-
-function buildMiniCandles(symbol: string, count = 20): CandleSnapshot[] {
-  return Array.from({ length: count }, (_, index) => {
-    const day = index + 1;
-    const open = 20 + day;
-    const close = open + (index % 2 === 0 ? 1.2 : -0.8);
-    return {
-      symbol,
-      date: `2026-05-${String(day).padStart(2, "0")}`,
-      open,
-      high: Math.max(open, close) + 0.9,
-      low: Math.min(open, close) - 0.7,
-      close,
-      volume: 10000 + day,
-      source: "test-real-candle",
-      delay_label: "免费公开源",
-    };
-  });
-}
 
 const dashboard: MarketDashboardResponse = {
   as_of: "2026-06-23T15:00:00Z",
@@ -172,7 +153,7 @@ const dashboard: MarketDashboardResponse = {
       symbol: "002765",
       name: "蓝黛科技",
       sector: "汽车零部件",
-      mini_candles: buildMiniCandles("002765"),
+      market_segment: "深主板",
       trade_date: "2026-06-23",
       close: 110.43,
       change_pct: 30,
@@ -187,7 +168,7 @@ const dashboard: MarketDashboardResponse = {
       symbol: "300770",
       name: "新媒股份",
       sector: "传媒",
-      mini_candles: buildMiniCandles("300770"),
+      market_segment: "创业板",
       trade_date: "2026-06-23",
       close: 26.1,
       change_pct: 30,
@@ -202,7 +183,7 @@ const dashboard: MarketDashboardResponse = {
       symbol: "000777",
       name: "流出股份",
       sector: "机械设备",
-      mini_candles: buildMiniCandles("000777"),
+      market_segment: "深主板",
       trade_date: "2026-06-23",
       close: 8.6,
       change_pct: -7.8,
@@ -217,7 +198,7 @@ const dashboard: MarketDashboardResponse = {
       symbol: "600888",
       name: "成交股份",
       sector: "高端制造",
-      mini_candles: [],
+      market_segment: "沪主板",
       trade_date: "2026-06-23",
       close: 18.4,
       change_pct: -2.1,
@@ -357,7 +338,9 @@ describe("MarketPage dashboard", () => {
     expect(await screen.findByText("蓝黛科技")).toBeTruthy();
     expect(firstDragonName()).toBe("蓝黛科技");
     expect(within(screen.getAllByTestId("dragon-row")[0]).getByText("汽车零部件")).toBeTruthy();
-    expect(within(screen.getAllByTestId("dragon-row")[0]).getByLabelText("蓝黛科技近20日日K缩略图")).toBeTruthy();
+    expect(within(screen.getAllByTestId("dragon-row")[0]).getByText("深主板")).toBeTruthy();
+    expect(screen.queryByTestId("mini-kline")).toBeNull();
+    expect(screen.queryByText("暂无K线")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "净流出" }));
     expect(firstDragonName()).toBe("流出股份");
@@ -373,8 +356,7 @@ describe("MarketPage dashboard", () => {
     expect(firstDragonName()).toBe("成交股份");
     expect(screen.getAllByText("成交额").length).toBeGreaterThan(1);
     expect(screen.getByText("88.90 亿")).toBeTruthy();
-    expect(within(screen.getAllByTestId("dragon-row")[0]).getByTestId("mini-kline-empty")).toBeTruthy();
-    expect(within(screen.getAllByTestId("dragon-row")[0]).getByText("暂无K线")).toBeTruthy();
+    expect(within(screen.getAllByTestId("dragon-row")[0]).getByText("沪主板")).toBeTruthy();
   });
 });
 

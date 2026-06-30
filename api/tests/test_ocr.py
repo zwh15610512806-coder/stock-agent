@@ -76,6 +76,93 @@ def test_ignores_ths_app_header_with_time() -> None:
     assert positions == []
 
 
+def test_parses_ths_watchlist_rows_without_quantity_or_cost() -> None:
+    positions = parse_position_text_lines(
+        [
+            "同花顺App",
+            "20:07",
+            "同花顺自选",
+            "4163.10+72.62",
+            "上证指数+1.78%▼",
+            "自选股",
+            "持仓股",
+            "汇总持仓",
+            "最新",
+            "涨幅",
+            "士兰微",
+            "44.80",
+            "+7.10%",
+            "2.",
+            "600460融",
+            "通裕重工",
+            "3.01",
+            "+8.27%",
+            "0.",
+            "创 300185融",
+            "方正科技",
+            "14.05",
+            "-2.43%",
+            "-0.",
+            "600601融",
+            "紫金矿业",
+            "30.44",
+            "+2.53%",
+            "0.",
+            "601899融",
+            "协鑫集成",
+            "3.11",
+            "+1.30%",
+            "0.",
+            "002506融",
+            "峰璟股份",
+            "3.96",
+            "+3.66%",
+            "0.",
+            "002662融",
+            "中能电气",
+            "6.20",
+            "+1.97%",
+            "0.",
+            "创 300062",
+            "联建光电",
+            "4.98",
+            "+2.05%",
+            "0.",
+            "创 300269",
+            "ST洲际",
+            "2.22",
+            "-3.48%",
+            "-0.",
+            "600759",
+            "南京熊猫",
+            "10.44",
+            "-1.42%",
+            "-0.",
+            "600775融",
+        ]
+    )
+
+    assert [item.symbol for item in positions] == [
+        "600460.SH",
+        "300185.SZ",
+        "600601.SH",
+        "601899.SH",
+        "002506.SZ",
+        "002662.SZ",
+        "300062.SZ",
+        "300269.SZ",
+        "600759.SH",
+        "600775.SH",
+    ]
+    assert positions[0].name == "士兰微"
+    assert positions[0].quantity == 0
+    assert positions[0].cost_price == 44.8
+    assert positions[0].current_price == 44.8
+    assert positions[0].raw_fields["识别类型"] == "自选/行情列表"
+    assert positions[1].name == "通裕重工"
+    assert positions[1].current_price == 3.01
+
+
 def test_parses_ai_position_json_payload() -> None:
     positions = parse_ai_position_payload(
         json.dumps(

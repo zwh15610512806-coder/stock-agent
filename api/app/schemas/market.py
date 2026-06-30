@@ -162,7 +162,7 @@ class DragonTigerItem(BaseModel):
     change_pct: float = 0
     turnover: float = 0
     sector: str = ""
-    mini_candles: list[CandleSnapshot] = Field(default_factory=list)
+    market_segment: str = ""
     net_amount: float = 0
     buy_amount: float = 0
     sell_amount: float = 0

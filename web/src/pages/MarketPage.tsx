@@ -15,7 +15,6 @@ import { api } from "../lib/api";
 import { formatCompact, formatMoney, formatNumber, toneForPct } from "../lib/format";
 import type {
   AShareActivity,
-  CandleSnapshot,
   CommodityQuote,
   DragonTigerItem,
   DashboardCacheStatus,
@@ -495,12 +494,12 @@ function DragonTigerList({ items }: { items: DragonTigerItem[] }) {
               <div className="dragon-row" data-testid="dragon-row" key={`${item.trade_date}-${item.symbol}-${index}`}>
                 <span className="rank-number">{index + 1}</span>
                 <div className="dragon-main">
-                  <strong>{item.name}</strong>
+                  <div className="dragon-title-row">
+                    <strong>{item.name}</strong>
+                    <span className="dragon-tag">{item.market_segment || "--"}</span>
+                    <span className="dragon-tag">{item.sector || "--"}</span>
+                  </div>
                   <span>{item.symbol} · {item.reason || item.trade_date}</span>
-                </div>
-                <div className="dragon-side">
-                  <span className="dragon-sector">{item.sector || "--"}</span>
-                  <MiniKline item={item} />
                 </div>
                 <div className="dragon-metrics">
                   <div className={`dragon-metric ${sortKey === "rise_pct" || sortKey === "fall_pct" ? "active" : ""}`}>
@@ -526,68 +525,6 @@ function DragonTigerList({ items }: { items: DragonTigerItem[] }) {
       )}
     </div>
   );
-}
-
-function MiniKline({ item }: { item: DragonTigerItem }) {
-  const candles = (item.mini_candles || []).filter(isDrawableCandle).slice(-20);
-  if (!candles.length) {
-    return (
-      <div className="mini-kline-empty" data-testid="mini-kline-empty">
-        暂无K线
-      </div>
-    );
-  }
-
-  const width = 104;
-  const height = 34;
-  const padding = 3;
-  const minLow = Math.min(...candles.map((candle) => candle.low));
-  const maxHigh = Math.max(...candles.map((candle) => candle.high));
-  const range = Math.max(maxHigh - minLow, 0.01);
-  const candleSlot = (width - padding * 2) / candles.length;
-  const candleWidth = Math.max(2, Math.min(5, candleSlot * 0.56));
-  const yFor = (value: number) => padding + ((maxHigh - value) / range) * (height - padding * 2);
-
-  return (
-    <svg
-      aria-label={`${item.name}近20日日K缩略图`}
-      className="mini-kline"
-      data-testid="mini-kline"
-      role="img"
-      viewBox={`0 0 ${width} ${height}`}
-    >
-      {candles.map((candle, index) => {
-        const x = padding + candleSlot * index + candleSlot / 2;
-        const openY = yFor(candle.open);
-        const closeY = yFor(candle.close);
-        const bodyTop = Math.min(openY, closeY);
-        const bodyHeight = Math.max(1.4, Math.abs(closeY - openY));
-        const tone = candle.close >= candle.open ? "up" : "down";
-        return (
-          <g key={`${candle.date}-${index}`}>
-            <line
-              className={`mini-candle-wick ${tone}`}
-              x1={x}
-              x2={x}
-              y1={yFor(candle.high)}
-              y2={yFor(candle.low)}
-            />
-            <rect
-              className={`mini-candle-body ${tone}`}
-              height={bodyHeight}
-              width={candleWidth}
-              x={x - candleWidth / 2}
-              y={bodyTop}
-            />
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-function isDrawableCandle(candle: CandleSnapshot): boolean {
-  return [candle.open, candle.high, candle.low, candle.close].every((value) => Number.isFinite(value) && value > 0);
 }
 
 function MarketEmpty({ title, compact = false }: { title: string; compact?: boolean }) {

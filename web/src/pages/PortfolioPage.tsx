@@ -35,8 +35,9 @@ export function PortfolioPage() {
       if (result.positions.length) {
         const syncResult = syncOcrPositionsBySymbol(positions, result.positions);
         setPositions(syncResult.positions);
+        const suffix = result.message ? ` ${result.message}` : "";
         setOcrSyncNotice(
-          `已同步 ${result.positions.length} 条持仓，更新 ${syncResult.updated} 条，新增 ${syncResult.added} 条，保留 ${syncResult.preserved} 条本地持仓。`,
+          `已同步 ${result.positions.length} 条持仓，更新 ${syncResult.updated} 条，新增 ${syncResult.added} 条，保留 ${syncResult.preserved} 条本地持仓。${suffix}`,
         );
       } else {
         setOcrSyncNotice("");

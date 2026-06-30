@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.schemas.market import CandleSnapshot, MarketCode, QuoteSnapshot, SymbolSearchResult
 from app.services.etfs import ETFService
 from app.services.macro import MacroDataService
+from app.services.macro_xray import MacroXrayService
 from app.services.market import INDEX_SYMBOLS, MarketDataService
 from app.services.stocks import StockScreenerService
 from app.services.symbols import STATIC_SYMBOLS, _a_share_pool, normalize_symbol, resolve_symbol_query, search_static_symbols
@@ -129,7 +130,21 @@ async def market_dashboard_intraday(
 
 
 @router.get("/market/macro-timeseries")
-async def macro_timeseries(request: Request) -> dict[str, Any]:
+async def macro_timeseries(
+    request: Request,
+    series_ids: str = Query(default=""),
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    max_points: int = Query(default=600, ge=1, le=5000),
+) -> Any:
+    if series_ids.strip():
+        parsed_ids = [item.strip() for item in series_ids.split(",") if item.strip()]
+        return await _macro_service(request).timeseries(
+            series_ids=parsed_ids,
+            start=start,
+            end=end,
+            max_points=max_points,
+        )
     dashboard = await _macro_service(request).dashboard()
     groups = {
         "rates": dashboard.rates,
@@ -154,40 +169,37 @@ async def macro_timeseries(request: Request) -> dict[str, Any]:
 
 
 @router.get("/market/macro-xray")
-async def macro_xray(request: Request) -> dict[str, Any]:
-    dashboard = await _macro_service(request).dashboard()
-    groups = {
-        "rates": dashboard.rates,
-        "indicators": dashboard.indicators,
-        "bond_yields": dashboard.bond_yields,
-        "fx_rates": dashboard.fx_rates,
-    }
-    live_count = sum(1 for points in groups.values() for point in points if point.status == "live" and point.value is not None)
-    total_count = sum(len(points) for points in groups.values())
-    return {
-        "status": dashboard.cache_status,
-        "as_of": dashboard.as_of,
-        "live_count": live_count,
-        "total_count": total_count,
-        "groups": [
-            {"id": key, "available": sum(1 for point in points if point.value is not None), "total": len(points)}
-            for key, points in groups.items()
-        ],
-        "source_status": [item.model_dump(mode="json") for item in dashboard.source_status],
-    }
+async def macro_xray(
+    request: Request,
+    universe_type: str = Query(default="index"),
+    universe_code: str = Query(default="000300.SH"),
+    scope: str = Query(default="non_financial"),
+    period: str = Query(default="latest"),
+    quarters: int = Query(default=40, ge=1, le=80),
+    lookback: int = Query(default=6, ge=1, le=24),
+) -> Any:
+    return await _macro_xray_service(request).xray(
+        universe_type=universe_type,
+        universe_code=universe_code,
+        scope=scope,
+        period=period,
+        quarters=quarters,
+        lookback=lookback,
+    )
 
 
 @router.get("/market/macro-xray/targets")
-async def macro_xray_targets() -> dict[str, Any]:
-    return {
-        "status": "live",
-        "items": [
-            {"id": "rates", "label": "Rates", "source": "akshare.macro_china_lpr"},
-            {"id": "indicators", "label": "Inflation/GDP/PMI/Credit", "source": "akshare macro"},
-            {"id": "bond_yields", "label": "China/US 10Y Yields", "source": "akshare.bond_zh_us_rate"},
-            {"id": "fx_rates", "label": "FX Rates", "source": "akshare.currency_boc_sina"},
-        ],
-    }
+async def macro_xray_targets(
+    request: Request,
+    universe_type: str = Query(default="index"),
+    lookback: int = Query(default=6, ge=1, le=24),
+    target_source: str = Query(default="stock_basic_full_v1"),
+) -> Any:
+    return await _macro_xray_service(request).targets(
+        universe_type=universe_type,
+        lookback=lookback,
+        target_source=target_source,
+    )
 
 
 @router.get("/stocks/v2/catalog")
@@ -566,4 +578,12 @@ def _macro_service(request: Request) -> MacroDataService:
     if service is None:
         service = MacroDataService()
         request.app.state.macro_service = service
+    return service
+
+
+def _macro_xray_service(request: Request) -> Any:
+    service = getattr(request.app.state, "macro_xray_service", None)
+    if service is None:
+        service = MacroXrayService(macro_service=_macro_service(request))
+        request.app.state.macro_xray_service = service
     return service

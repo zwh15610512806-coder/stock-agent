@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as echarts from "echarts";
+import type { ECBasicOption } from "echarts/types/dist/shared";
 import type { MarketHeatItem } from "../lib/types";
 
 export type HeatmapAreaMetric = "turnover" | "net_amount" | "change_pct";
@@ -23,6 +24,19 @@ export function Heatmap({ data, areaMetric = "turnover", displayLimit = data.len
       return;
     }
     const chart = echarts.init(ref.current);
+    chart.setOption(buildHeatmapOption(data, areaMetric, displayLimit));
+    const handleResize = () => chart.resize();
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      chart.dispose();
+    };
+  }, [areaMetric, data, displayLimit]);
+
+  return <div className="heatmap-host" ref={ref} role="img" aria-label="板块热力图" />;
+}
+
+export function buildHeatmapOption(data: HeatmapItem[], areaMetric: HeatmapAreaMetric, displayLimit: number): ECBasicOption {
     const sortedItems = [...data].sort((a, b) => getAreaValue(b, areaMetric) - getAreaValue(a, areaMetric));
     const isCompact = displayLimit >= 120;
     const isDense = displayLimit >= 60;
@@ -32,30 +46,30 @@ export function Heatmap({ data, areaMetric = "turnover", displayLimit = data.len
         const color = colorForChange(item.change_pct);
         const labelColor = Math.abs(item.change_pct) >= 1.75 ? "#ffffff" : "#07111f";
         const mutedColor = Math.abs(item.change_pct) >= 1.75 ? "rgba(255,255,255,0.88)" : "#486079";
-        const largeTile = index < (isCompact ? 10 : 8);
+        const largeTile = index < (isCompact ? 12 : 10);
         return {
           ...item,
-          value: areaValue,
+          value: compressAreaValue(areaValue, displayLimit),
           label: {
             color: labelColor,
             formatter: () => formatTileLabel(item, index, displayLimit),
-            minMargin: isCompact ? 1 : 3,
-            overflow: "truncate",
-            padding: isCompact ? [6, 6, 5, 6] : [9, 8, 8, 8],
+            minMargin: isCompact ? 0 : 1,
+            overflow: "break",
+            padding: isCompact ? [4, 4, 3, 4] : isDense ? [6, 6, 5, 6] : [9, 8, 8, 8],
             position: "insideTopLeft",
             rich: {
               pct: {
                 color: labelColor,
                 fontFamily: "JetBrains Mono, Cascadia Mono, Consolas, monospace",
-                fontSize: isCompact ? (largeTile ? 13 : 12) : largeTile ? 17 : 14,
+                fontSize: isCompact ? (largeTile ? 13 : 12) : largeTile ? 17 : 13,
                 fontWeight: 900,
-                lineHeight: isCompact ? 17 : largeTile ? 25 : 21,
+                lineHeight: isCompact ? 16 : largeTile ? 24 : 18,
               },
               name: {
                 color: labelColor,
-                fontSize: isCompact ? 10 : largeTile ? 13 : 11,
+                fontSize: isCompact ? 11 : largeTile ? 13 : 11,
                 fontWeight: 900,
-                lineHeight: isCompact ? 14 : 19,
+                lineHeight: isCompact ? 14 : 16,
               },
               amount: {
                 color: mutedColor,
@@ -68,16 +82,16 @@ export function Heatmap({ data, areaMetric = "turnover", displayLimit = data.len
           itemStyle: {
             color,
             borderColor: "#ffffff",
-            borderRadius: isCompact ? 5 : 8,
+            borderRadius: isCompact ? 4 : 7,
             borderWidth: isCompact ? 2 : 3,
           },
           children: [],
         };
       });
 
-    chart.setOption({
+    return {
       animationDuration: 520,
-      animationEasing: "cubicOut",
+      animationEasing: "cubicOut" as const,
       tooltip: {
         backgroundColor: "rgba(15, 23, 42, 0.94)",
         borderWidth: 0,
@@ -112,7 +126,7 @@ export function Heatmap({ data, areaMetric = "turnover", displayLimit = data.len
           breadcrumb: { show: false },
           upperLabel: { show: false },
           leafDepth: 1,
-          squareRatio: isCompact ? 1.15 : 1.08,
+          squareRatio: isCompact ? 1.35 : isDense ? 1.28 : 1.18,
           sort: "desc",
           visibleMin: 1,
           label: {
@@ -120,42 +134,46 @@ export function Heatmap({ data, areaMetric = "turnover", displayLimit = data.len
           },
           itemStyle: {
             borderColor: "#ffffff",
-            borderRadius: isCompact ? 5 : 8,
+            borderRadius: isCompact ? 4 : 7,
             borderWidth: isCompact ? 2 : 3,
-            gapWidth: isCompact ? 1 : 3,
+            gapWidth: isCompact ? 2 : 3,
           },
           emphasis: {
-            focus: "self",
+            focus: "none",
+            scale: true,
+            scaleSize: isCompact ? 1.2 : 1.6,
+            label: {
+              opacity: 1,
+            },
             itemStyle: {
               borderColor: "#0f172a",
-              borderWidth: 2,
-              shadowBlur: 14,
-              shadowColor: "rgba(15,23,42,0.16)",
+              borderWidth: isCompact ? 3 : 4,
+              shadowBlur: 0,
+              shadowColor: "transparent",
+            },
+          },
+          blur: {
+            itemStyle: {
+              opacity: 1,
+            },
+            label: {
+              opacity: 1,
             },
           },
           levels: [
             {
               itemStyle: {
                 borderColor: "#ffffff",
-                borderRadius: isCompact ? 5 : 8,
+                borderRadius: isCompact ? 4 : 7,
                 borderWidth: isCompact ? 2 : 3,
-                gapWidth: isCompact ? 1 : 3,
+                gapWidth: isCompact ? 2 : 3,
               },
             },
           ],
           data: heatmapData,
         },
       ],
-    });
-    const handleResize = () => chart.resize();
-    window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      chart.dispose();
     };
-  }, [areaMetric, data, displayLimit]);
-
-  return <div className="heatmap-host" ref={ref} role="img" aria-label="板块热力图" />;
 }
 
 function getAreaValue(item: HeatmapItem, metric: HeatmapAreaMetric): number {
@@ -168,14 +186,27 @@ function getAreaValue(item: HeatmapItem, metric: HeatmapAreaMetric): number {
   return Math.max(1, item.turnover || Math.abs(item.change_pct) * 100000000);
 }
 
+function compressAreaValue(value: number, displayLimit: number): number {
+  const exponent = displayLimit >= 60 ? 0.64 : 0.72;
+  return Math.max(1, Math.pow(Math.max(value, 1), exponent));
+}
+
 function formatTileLabel(item: HeatmapItem, index: number, displayLimit: number): string {
   if (displayLimit >= 120) {
-    return `{pct|${formatSignedPct(item.change_pct)}}\n{name|${item.name}}`;
+    return `{pct|${formatSignedPct(item.change_pct)}}\n{name|${shortHeatName(item.name, 5)}}`;
   }
   if (displayLimit >= 60 && index >= 30) {
-    return `{pct|${formatSignedPct(item.change_pct)}}\n{name|${item.name}}`;
+    return `{pct|${formatSignedPct(item.change_pct)}}\n{name|${shortHeatName(item.name, 6)}}`;
   }
   return `{pct|${formatSignedPct(item.change_pct)}}\n{name|${item.name}}\n{amount|${formatHeatAmount(item.turnover)}}`;
+}
+
+function shortHeatName(value: string, limit: number): string {
+  const normalized = value.trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+  return normalized.slice(0, limit);
 }
 
 function formatSignedPct(value: number): string {

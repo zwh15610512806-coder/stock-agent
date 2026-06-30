@@ -144,7 +144,7 @@ class DashboardAkShare:
                     "上榜原因": "日涨幅偏离值达7%",
                 },
                 {
-                    "代码": "300770",
+                    "代码": "688770",
                     "名称": "新媒股份",
                     "上榜日": "2026-06-23",
                     "收盘价": 26.1,
@@ -154,6 +154,18 @@ class DashboardAkShare:
                     "龙虎榜买入额": 200000000,
                     "龙虎榜卖出额": 80000000,
                     "上榜原因": "日换手率达20%",
+                },
+                {
+                    "代码": "300770",
+                    "名称": "创业股份",
+                    "上榜日": "2026-06-23",
+                    "收盘价": 18.6,
+                    "涨跌幅": -8.2,
+                    "成交额": "12.21亿",
+                    "龙虎榜净买额": -56000000,
+                    "龙虎榜买入额": 120000000,
+                    "龙虎榜卖出额": 176000000,
+                    "上榜原因": "日跌幅偏离值达7%",
                 },
                 {
                     "代码": "600000",
@@ -174,7 +186,8 @@ class DashboardAkShare:
         return FakeTable(
             [
                 {"代码": "002765", "名称": "蓝黛科技", "所属行业": "汽车零部件"},
-                {"代码": "300770", "名称": "新媒股份", "所属行业": "传媒"},
+                {"代码": "688770", "名称": "新媒股份", "所属行业": "传媒"},
+                {"代码": "300770", "名称": "创业股份", "所属行业": "电力设备"},
             ]
         )
 
@@ -215,21 +228,7 @@ class DashboardMarketService(MarketDataService):
         ]
 
     def _fetch_akshare_candles_sync(self, symbol: str, period: str, limit: int) -> list[CandleSnapshot]:
-        assert period == "daily"
-        return [
-            CandleSnapshot(
-                symbol=symbol,
-                date=f"2026-05-{day:02d}",
-                open=20 + day,
-                high=22 + day,
-                low=19 + day,
-                close=21 + day,
-                volume=50000 + day,
-                source="test-real-candle",
-                delay_label="test delayed source",
-            )
-            for day in range(1, limit + 1)
-        ]
+        raise AssertionError("dragon tiger dashboard should not fetch mini candles")
 
 
 def test_parse_cn_money_and_pct_units() -> None:
@@ -593,13 +592,14 @@ async def test_dashboard_uses_real_sources_and_reports_cache_status(tmp_path) ->
     assert dashboard.commodity_quotes[0].name == "黄金连续"
     assert dashboard.commodity_quotes[0].sparkline
     assert dashboard.dragon_tiger[0].name == "蓝黛科技"
-    assert len(dashboard.dragon_tiger) == 2
+    assert len(dashboard.dragon_tiger) == 3
     assert dashboard.dragon_tiger[0].turnover == 4112000000
     assert dashboard.dragon_tiger[0].sector == "汽车零部件"
     assert dashboard.dragon_tiger[1].sector == "传媒"
-    assert len(dashboard.dragon_tiger[0].mini_candles) == 20
-    assert dashboard.dragon_tiger[0].mini_candles[0].source == "test-real-candle"
-    assert {item.name for item in dashboard.dragon_tiger} == {"蓝黛科技", "新媒股份"}
+    assert dashboard.dragon_tiger[0].market_segment == "深主板"
+    assert dashboard.dragon_tiger[1].market_segment == "科创板"
+    assert {item.name for item in dashboard.dragon_tiger} == {"蓝黛科技", "新媒股份", "创业股份"}
+    assert {item.market_segment for item in dashboard.dragon_tiger} == {"深主板", "创业板", "科创板"}
     assert all(item.trade_date == "2026-06-23" for item in dashboard.dragon_tiger)
     assert dashboard.index_sparklines["000001.SH"][0] > 0
     assert all(status.status == "live" for status in dashboard.source_status)
@@ -801,6 +801,8 @@ def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
     assert body["dragon_tiger"][0]["name"] == "蓝黛科技"
     assert body["dragon_tiger"][0]["turnover"] == 4112000000
     assert body["dragon_tiger"][0]["sector"] == "汽车零部件"
-    assert len(body["dragon_tiger"][0]["mini_candles"]) == 20
-    assert {item["name"] for item in body["dragon_tiger"]} == {"蓝黛科技", "新媒股份"}
+    assert body["dragon_tiger"][0]["market_segment"] == "深主板"
+    assert "mini_candles" not in body["dragon_tiger"][0]
+    assert {item["name"] for item in body["dragon_tiger"]} == {"蓝黛科技", "新媒股份", "创业股份"}
+    assert {item["market_segment"] for item in body["dragon_tiger"]} == {"深主板", "创业板", "科创板"}
     assert body["index_sparklines"]["000001.SH"]

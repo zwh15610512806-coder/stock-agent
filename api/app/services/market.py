@@ -58,7 +58,6 @@ COMBINED_NEWS_SOURCE = "model-web-search/akshare-news"
 COMMODITY_SOURCE = "akshare-commodity"
 LHB_SOURCE = "eastmoney-lhb"
 ASHARE_TURNOVER_SOURCE = "akshare-exchange-summary"
-DRAGON_TIGER_MINI_CANDLE_LIMIT = 20
 DRAGON_TIGER_SECTOR_FIELDS = ("所属行业", "行业", "板块", "行业板块", "sector", "industry")
 SNAPSHOT_TTL_SECONDS = 10 * 60
 SLOW_SNAPSHOT_TTL_SECONDS = 30 * 60
@@ -805,7 +804,6 @@ class MarketDataService:
                 item.model_copy(
                     update={
                         "sector": sector,
-                        "mini_candles": self._dragon_tiger_mini_candles_sync(item.symbol),
                     }
                 )
             )
@@ -831,17 +829,6 @@ class MarketDataService:
             if sector:
                 sectors[code] = sector
         return sectors
-
-    def _dragon_tiger_mini_candles_sync(self, symbol: str) -> list[CandleSnapshot]:
-        try:
-            candles = self._fetch_akshare_candles_sync(
-                normalize_symbol(symbol, "CN"),
-                "daily",
-                DRAGON_TIGER_MINI_CANDLE_LIMIT,
-            )
-        except Exception:
-            return []
-        return [candle for candle in candles[-DRAGON_TIGER_MINI_CANDLE_LIMIT:] if "sample" not in candle.source.lower()]
 
     async def _dashboard_index_sparklines(
         self,
@@ -1513,6 +1500,24 @@ def _dragon_tiger_sector_from_row(row: Mapping[str, object]) -> str:
     return _clean_text(_row_value(row, DRAGON_TIGER_SECTOR_FIELDS))
 
 
+def _dragon_tiger_market_segment(symbol: str) -> str:
+    normalized = normalize_symbol(symbol, "CN")
+    code = _plain_code(normalized)
+    if normalized.endswith(".BJ"):
+        return "北交所"
+    if code.startswith(("688", "689")):
+        return "科创板"
+    if normalized.endswith(".SH"):
+        return "沪主板"
+    if normalized.endswith(".SZ"):
+        if code.startswith("30"):
+            return "创业板"
+        return "深主板"
+    if code:
+        return "A股"
+    return ""
+
+
 def _dragon_tiger_item_from_row(row: Mapping[str, object]) -> DragonTigerItem | None:
     symbol = _clean_text(_row_value(row, ("代码", "股票代码", "symbol")))
     name = _clean_text(_row_value(row, ("名称", "股票名称", "name")))
@@ -1527,6 +1532,7 @@ def _dragon_tiger_item_from_row(row: Mapping[str, object]) -> DragonTigerItem | 
         change_pct=parse_pct(_row_value(row, ("涨跌幅", "change_pct"))),
         turnover=parse_cn_money(_row_value(row, ("成交额", "成交金额", "成交金额(元)", "成交金额（元）", "turnover", "amount"))),
         sector=_dragon_tiger_sector_from_row(row),
+        market_segment=_dragon_tiger_market_segment(symbol),
         net_amount=parse_cn_money(_row_value(row, ("龙虎榜净买额", "机构买入净额", "净额", "net_amount"))),
         buy_amount=parse_cn_money(_row_value(row, ("龙虎榜买入额", "买入金额", "buy_amount"))),
         sell_amount=parse_cn_money(_row_value(row, ("龙虎榜卖出额", "卖出金额", "sell_amount"))),

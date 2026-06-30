@@ -33,3 +33,33 @@ class MacroDashboardResponse(BaseModel):
     bond_yields: list[MacroDataPoint]
     fx_rates: list[MacroDataPoint]
     disclaimer: str
+
+
+class MacroTimeseriesPoint(BaseModel):
+    date: str
+    value: float | None = None
+    point_date: str | None = None
+    release_date: str | None = None
+
+
+class MacroTimeseriesSeries(BaseModel):
+    series_id: str
+    name: str
+    category: str
+    frequency: str
+    unit: str
+    source: str
+    status: MacroSourceState
+    methodology: str
+    is_derived: bool = False
+    description: str = ""
+    points: list[MacroTimeseriesPoint]
+
+
+class MacroTimeseriesResponse(BaseModel):
+    ts: datetime
+    start: str
+    end: str
+    series: list[MacroTimeseriesSeries]
+    source_status: list[MacroSourceStatus]
+    disclaimer: str

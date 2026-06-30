@@ -136,7 +136,7 @@ export interface DragonTigerItem {
   change_pct: number;
   turnover: number;
   sector: string;
-  mini_candles: CandleSnapshot[];
+  market_segment: string;
   net_amount: number;
   buy_amount: number;
   sell_amount: number;
@@ -199,6 +199,102 @@ export interface MacroDashboardResponse {
   bond_yields: SourceMetric[];
   fx_rates: SourceMetric[];
   disclaimer: string;
+}
+
+export interface MacroTimeseriesPoint {
+  date: string;
+  value: number | null;
+  point_date: string | null;
+  release_date: string | null;
+}
+
+export interface MacroTimeseriesSeries {
+  series_id: string;
+  name: string;
+  category: string;
+  frequency: string;
+  unit: string;
+  source: string;
+  status: DashboardSourceState;
+  methodology: string;
+  is_derived: boolean;
+  description: string;
+  points: MacroTimeseriesPoint[];
+}
+
+export interface MacroTimeseriesResponse {
+  ts: string;
+  start: string;
+  end: string;
+  series: MacroTimeseriesSeries[];
+  source_status: DashboardSourceStatus[];
+  disclaimer: string;
+}
+
+export interface MacroXrayPoint {
+  period: string;
+  date: string;
+  revenueYoy: number | null;
+  profitYoy: number | null;
+  profitRevenueGap?: number | null;
+  receivableYoy?: number | null;
+  inventoryYoy: number | null;
+  ocfYoy?: number | null;
+  capexYoy?: number | null;
+  cashYoy?: number | null;
+  interestDebtYoy?: number | null;
+  cashConversionRatio: number | null;
+  grossMarginProxy?: number | null;
+  expenseToRevenue?: number | null;
+  rdYoy?: number | null;
+  lossCompanyRatio?: number | null;
+}
+
+export interface MacroXrayResponse {
+  ts: string;
+  status: DashboardSourceState;
+  index: string;
+  universe: {
+    type: string;
+    code: string;
+    name: string;
+    scope: string;
+  };
+  period: {
+    latest: string | null;
+    quarters: number;
+    lookback: number;
+  };
+  sample: {
+    count: number;
+    coverage: number;
+    source: string;
+  };
+  latest: MacroXrayPoint | null;
+  points: MacroXrayPoint[];
+  nominalGdp: MacroXrayPoint[];
+  crossIndex: MacroXrayPoint[];
+  insights: Array<{ level: string; title: string; detail: string }>;
+  diagnostics: string[];
+  source_status: DashboardSourceStatus[];
+  methodology: string;
+}
+
+export interface MacroXrayTarget {
+  id: string;
+  type: string;
+  code: string;
+  name: string;
+  source: string;
+  status: DashboardSourceState;
+}
+
+export interface MacroXrayTargetsResponse {
+  ts: string;
+  status: DashboardSourceState;
+  items: MacroXrayTarget[];
+  source_status: DashboardSourceStatus[];
+  methodology: string;
 }
 
 export interface StockScreenerItem {

@@ -52,4 +52,33 @@ describe("api client error classification", () => {
     expect(apiFailureMessage(new ApiError("HTTP 503", "http", { status: 503 }), "选股器")).toContain("HTTP 503");
     expect(apiFailureMessage(new Error("boom"), "持仓分析")).toContain("持仓分析暂不可用");
   });
+  it("requests macro timeseries and X-Ray endpoints with query parameters", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", { status: 200 })));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.macroTimeseries({
+      series_ids: ["cn.money.m1_yoy", "cn.ppi.yoy"],
+      start: "2026-01-01",
+      end: "2026-06-30",
+      max_points: 40,
+    });
+    await api.macroXray({ universe_type: "industry", universe_code: "BK1036", scope: "non_financial" });
+    await api.macroXrayTargets({ universe_type: "all", lookback: 6 });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/macro/timeseries?series_ids=cn.money.m1_yoy%2Ccn.ppi.yoy&start=2026-01-01&end=2026-06-30&max_points=40",
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/market/macro-xray?universe_type=industry&universe_code=BK1036&scope=non_financial",
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/api/market/macro-xray/targets?universe_type=all&lookback=6",
+      expect.any(Object),
+    );
+  });
 });

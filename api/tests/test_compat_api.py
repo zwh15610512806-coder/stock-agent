@@ -186,6 +186,91 @@ class FakeMacroService:
             disclaimer="test",
         )
 
+    async def timeseries(self, **kwargs) -> dict:
+        assert kwargs["series_ids"] == ["cn.money.m1_yoy"]
+        return {
+            "ts": datetime(2026, 6, 24, 15, 0, tzinfo=UTC),
+            "start": "2026-01-01",
+            "end": "2026-06-30",
+            "series": [
+                {
+                    "series_id": "cn.money.m1_yoy",
+                    "name": "M1 YoY",
+                    "category": "money",
+                    "frequency": "monthly",
+                    "unit": "%",
+                    "source": "akshare.macro_china_money_supply",
+                    "status": "live",
+                    "methodology": "test",
+                    "is_derived": False,
+                    "description": "",
+                    "points": [{"date": "2026-05-01", "value": 4.8, "point_date": "2026-05-01", "release_date": None}],
+                }
+            ],
+            "source_status": [
+                {
+                    "name": "macro_china_money_supply",
+                    "status": "live",
+                    "source": "akshare.macro_china_money_supply",
+                    "detail": "",
+                    "as_of": "2026-06-24T15:00:00Z",
+                }
+            ],
+            "disclaimer": "test",
+        }
+
+
+class FakeMacroXrayService:
+    async def xray(self, **kwargs) -> dict:
+        assert kwargs["universe_code"] == "000300.SH"
+        return {
+            "ts": datetime(2026, 6, 24, 15, 0, tzinfo=UTC),
+            "status": "live",
+            "index": "000300.SH",
+            "universe": {"type": "index", "code": "000300.SH", "name": "CSI 300", "scope": "non_financial"},
+            "period": {"latest": "2026Q2", "quarters": 40, "lookback": 6},
+            "sample": {"count": 300, "coverage": 1.0, "source": "public-proxy"},
+            "latest": {
+                "period": "2026Q2",
+                "revenueYoy": 0.06,
+                "profitYoy": 0.04,
+                "inventoryYoy": 0.03,
+                "cashConversionRatio": 0.82,
+            },
+            "points": [
+                {
+                    "period": "2026Q2",
+                    "date": "2026-06-30",
+                    "revenueYoy": 0.06,
+                    "profitYoy": 0.04,
+                    "inventoryYoy": 0.03,
+                    "cashConversionRatio": 0.82,
+                }
+            ],
+            "source_status": [],
+            "insights": [],
+            "diagnostics": [],
+            "methodology": "public proxy",
+        }
+
+    async def targets(self, **kwargs) -> dict:
+        return {
+            "ts": datetime(2026, 6, 24, 15, 0, tzinfo=UTC),
+            "status": "live",
+            "items": [
+                {
+                    "id": "index:000300.SH",
+                    "type": "index",
+                    "code": "000300.SH",
+                    "name": "CSI 300",
+                    "source": "static-index-targets",
+                    "status": "live",
+                }
+            ],
+            "source_status": [],
+            "methodology": "test",
+        }
+
 
 def make_client() -> TestClient:
     from app.routers.compat import router
@@ -195,6 +280,7 @@ def make_client() -> TestClient:
     app.state.stock_screener_service = FakeStockService()
     app.state.etf_service = FakeETFService()
     app.state.macro_service = FakeMacroService()
+    app.state.macro_xray_service = FakeMacroXrayService()
     app.include_router(router)
     return TestClient(app)
 
@@ -311,4 +397,35 @@ def test_etf_catalog_and_macro_timeseries_wrappers() -> None:
     assert xray_response.status_code == 200
     assert xray_response.json()["status"] == "live"
     assert target_response.status_code == 200
-    assert "rates" in {item["id"] for item in target_response.json()["items"]}
+    assert "index:000300.SH" in {item["id"] for item in target_response.json()["items"]}
+
+
+def test_macro_timeseries_wrapper_accepts_series_ids_query() -> None:
+    client = make_client()
+
+    response = client.get(
+        "/api/market/macro-timeseries",
+        params={"series_ids": "cn.money.m1_yoy", "start": "2026-01-01", "end": "2026-06-30", "max_points": 10},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["series"][0]["series_id"] == "cn.money.m1_yoy"
+    assert body["series"][0]["points"][0]["value"] == 4.8
+    assert body["start"] == "2026-01-01"
+
+
+def test_macro_xray_wrapper_returns_universe_points_and_targets() -> None:
+    client = make_client()
+
+    xray_response = client.get(
+        "/api/market/macro-xray",
+        params={"universe_type": "index", "universe_code": "000300.SH", "scope": "non_financial"},
+    )
+    targets_response = client.get("/api/market/macro-xray/targets", params={"universe_type": "index"})
+
+    assert xray_response.status_code == 200
+    assert xray_response.json()["universe"]["code"] == "000300.SH"
+    assert xray_response.json()["points"][0]["revenueYoy"] == 0.06
+    assert targets_response.status_code == 200
+    assert targets_response.json()["items"][0]["id"] == "index:000300.SH"

@@ -7,6 +7,9 @@ import type {
   EtfCandlesResponse,
   EtfSearchResponse,
   MacroDashboardResponse,
+  MacroTimeseriesResponse,
+  MacroXrayResponse,
+  MacroXrayTargetsResponse,
   MarketDashboardResponse,
   MarketCode,
   MarketOverviewResponse,
@@ -100,6 +103,45 @@ export const api = {
   marketDashboard: (markets: MarketCode[] = ["CN", "HK", "US"], period = "daily") =>
     requestJson<MarketDashboardResponse>(`/api/market/dashboard?markets=${markets.join(",")}&period=${period}`),
   macroDashboard: () => requestJson<MacroDashboardResponse>("/api/macro/dashboard"),
+  macroTimeseries: (params: { series_ids: string[]; start?: string; end?: string; max_points?: number }) => {
+    const query = new URLSearchParams();
+    query.set("series_ids", params.series_ids.join(","));
+    if (params.start) {
+      query.set("start", params.start);
+    }
+    if (params.end) {
+      query.set("end", params.end);
+    }
+    if (params.max_points) {
+      query.set("max_points", String(params.max_points));
+    }
+    return requestJson<MacroTimeseriesResponse>(`/api/macro/timeseries?${query.toString()}`);
+  },
+  macroXray: (params: {
+    universe_type?: string;
+    universe_code?: string;
+    scope?: string;
+    period?: string;
+    quarters?: number;
+    lookback?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, String(value));
+      }
+    });
+    return requestJson<MacroXrayResponse>(`/api/market/macro-xray?${query.toString()}`);
+  },
+  macroXrayTargets: (params: { universe_type?: string; lookback?: number; target_source?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, String(value));
+      }
+    });
+    return requestJson<MacroXrayTargetsResponse>(`/api/market/macro-xray/targets?${query.toString()}`);
+  },
   quotes: (symbols: string[]) =>
     requestJson<QuoteSnapshot[]>(`/api/market/quotes?symbols=${encodeURIComponent(symbols.join(","))}`),
   candles: (symbol: string, period = "daily", limit = 120) =>
