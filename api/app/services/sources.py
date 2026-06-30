@@ -4,6 +4,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.schemas.sources import FreeDataSource, SourceCacheStatus, SourceKeyStatus, SourcesStatusResponse
+from app.services.runtime_paths import runtime_cache_path
 
 SOURCES_DISCLAIMER = (
     "Free public market data may be delayed, incomplete, unavailable, or rate limited. "
@@ -60,7 +61,7 @@ def _cache_directory(path: str | Path) -> Path:
 
 
 def _default_market_cache_path() -> Path:
-    return Path(__file__).resolve().parents[3] / ".runtime" / "market_cache.sqlite3"
+    return runtime_cache_path(Path(__file__).resolve().parents[3], "market_cache.sqlite3")
 
 
 def _free_data_sources() -> list[FreeDataSource]:

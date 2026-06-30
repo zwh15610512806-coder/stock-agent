@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     volcengine_api_base: str = "https://ark.cn-beijing.volces.com/api/v3"
     volcengine_ocr_model: str = "doubao-seed-2-0-lite-260215"
     market_cache_ttl_seconds: int = 90
+    macro_data_provider: str = "hybrid"
+    danginvest_base_url: str = "https://dang-invest.com"
+    danginvest_timeout_seconds: float = 8.0
     tencentcloud_secret_id: str = ""
     tencentcloud_secret_key: str = ""
     tencentcloud_region: str = "ap-guangzhou"

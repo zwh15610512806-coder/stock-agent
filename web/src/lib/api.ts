@@ -115,7 +115,7 @@ export const api = {
     if (params.max_points) {
       query.set("max_points", String(params.max_points));
     }
-    return requestJson<MacroTimeseriesResponse>(`/api/macro/timeseries?${query.toString()}`);
+    return requestJson<MacroTimeseriesResponse>(`/api/market/macro-timeseries?${query.toString()}`);
   },
   macroXray: (params: {
     universe_type?: string;

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.schemas.market import CandleSnapshot, MarketCode, QuoteSnapshot, SymbolSearchResult
 from app.services.etfs import ETFService
 from app.services.macro import MacroDataService
+from app.services.macro_provider import macro_provider_for_settings
 from app.services.macro_xray import MacroXrayService
 from app.services.market import INDEX_SYMBOLS, MarketDataService
 from app.services.stocks import StockScreenerService
@@ -139,7 +140,7 @@ async def macro_timeseries(
 ) -> Any:
     if series_ids.strip():
         parsed_ids = [item.strip() for item in series_ids.split(",") if item.strip()]
-        return await _macro_service(request).timeseries(
+        return await _macro_provider(request).timeseries(
             series_ids=parsed_ids,
             start=start,
             end=end,
@@ -178,7 +179,7 @@ async def macro_xray(
     quarters: int = Query(default=40, ge=1, le=80),
     lookback: int = Query(default=6, ge=1, le=24),
 ) -> Any:
-    return await _macro_xray_service(request).xray(
+    return await _macro_provider(request).xray(
         universe_type=universe_type,
         universe_code=universe_code,
         scope=scope,
@@ -195,7 +196,7 @@ async def macro_xray_targets(
     lookback: int = Query(default=6, ge=1, le=24),
     target_source: str = Query(default="stock_basic_full_v1"),
 ) -> Any:
-    return await _macro_xray_service(request).targets(
+    return await _macro_provider(request).targets(
         universe_type=universe_type,
         lookback=lookback,
         target_source=target_source,
@@ -587,3 +588,14 @@ def _macro_xray_service(request: Request) -> Any:
         service = MacroXrayService(macro_service=_macro_service(request))
         request.app.state.macro_xray_service = service
     return service
+
+
+def _macro_provider(request: Request) -> Any:
+    provider = getattr(request.app.state, "macro_provider", None)
+    if provider is None:
+        provider = macro_provider_for_settings(
+            macro_service=_macro_service(request),
+            xray_service=_macro_xray_service(request),
+        )
+        request.app.state.macro_provider = provider
+    return provider

@@ -1,11 +1,14 @@
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.schemas.macro import MacroSourceState, MacroSourceStatus
 
 
 class MacroXrayUniverse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     type: str
     code: str
     name: str
@@ -13,18 +16,24 @@ class MacroXrayUniverse(BaseModel):
 
 
 class MacroXrayPeriod(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     latest: str | None = None
-    quarters: int
-    lookback: int
+    quarters: int = 0
+    lookback: int = 0
 
 
 class MacroXraySample(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     count: int
     coverage: float
     source: str
 
 
 class MacroXrayPoint(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     period: str
     date: str
     revenueYoy: float | None = None
@@ -41,6 +50,15 @@ class MacroXrayPoint(BaseModel):
     expenseToRevenue: float | None = None
     rdYoy: float | None = None
     lossCompanyRatio: float | None = None
+    equipmentRenewalRatio: float | None = None
+    distributionCashYoy: float | None = None
+    expenseYoy: float | None = None
+    fixedAssetsYoy: float | None = None
+    depreciationYoy: float | None = None
+    employeeCashYoy: float | None = None
+    orderBacklogYoy: float | None = None
+    payableYoy: float | None = None
+    netCashCompanyRatio: float | None = None
 
 
 class MacroXrayInsight(BaseModel):
@@ -50,9 +68,11 @@ class MacroXrayInsight(BaseModel):
 
 
 class MacroXrayResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     ts: datetime
     status: MacroSourceState
-    index: str
+    index: str | dict[str, Any]
     universe: MacroXrayUniverse
     period: MacroXrayPeriod
     sample: MacroXraySample
@@ -67,6 +87,8 @@ class MacroXrayResponse(BaseModel):
 
 
 class MacroXrayTarget(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: str
     type: str
     code: str
@@ -76,8 +98,11 @@ class MacroXrayTarget(BaseModel):
 
 
 class MacroXrayTargetsResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     ts: datetime
     status: MacroSourceState
     items: list[MacroXrayTarget]
+    targets: list[MacroXrayTarget] = []
     source_status: list[MacroSourceStatus] = []
     methodology: str

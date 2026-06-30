@@ -17,6 +17,7 @@ from app.schemas.macro import (
     MacroTimeseriesSeries,
 )
 from app.services.market_cache import CachedSnapshot, MarketSnapshotCache
+from app.services.runtime_paths import runtime_cache_path
 
 MACRO_SOURCE = "akshare-macro-free"
 MACRO_SNAPSHOT_TTL_SECONDS = 6 * 60 * 60
@@ -1061,4 +1062,4 @@ def _macro_cache_status(statuses: list[MacroSourceStatus]) -> MacroCacheStatus:
 
 
 def _default_macro_cache_path() -> Path:
-    return Path(__file__).resolve().parents[3] / ".runtime" / "macro_cache.sqlite3"
+    return runtime_cache_path(Path(__file__).resolve().parents[3], "macro_cache.sqlite3")

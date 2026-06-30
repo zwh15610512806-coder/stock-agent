@@ -248,27 +248,48 @@ export interface MacroXrayPoint {
   expenseToRevenue?: number | null;
   rdYoy?: number | null;
   lossCompanyRatio?: number | null;
+  profitDeclineCompanyRatio?: number | null;
+  equipmentRenewalRatio?: number | null;
+  distributionCashYoy?: number | null;
+  expenseYoy?: number | null;
+  fixedAssetsYoy?: number | null;
+  depreciationYoy?: number | null;
+  employeeCashYoy?: number | null;
+  orderBacklogYoy?: number | null;
+  payableYoy?: number | null;
+  netCashCompanyRatio?: number | null;
+  [key: string]: unknown;
 }
 
 export interface MacroXrayResponse {
   ts: string;
   status: DashboardSourceState;
-  index: string;
+  index: string | { code?: string; name?: string };
   universe: {
     type: string;
     code: string;
     name: string;
     scope: string;
+    [key: string]: unknown;
   };
   period: {
     latest: string | null;
     quarters: number;
     lookback: number;
+    periodEnd?: string;
+    label?: string;
+    asOfDate?: string;
+    [key: string]: unknown;
   };
   sample: {
     count: number;
     coverage: number;
     source: string;
+    currentConstituentCount?: number;
+    excludedCount?: number;
+    method?: string;
+    quality?: Record<string, unknown>;
+    [key: string]: unknown;
   };
   latest: MacroXrayPoint | null;
   points: MacroXrayPoint[];
@@ -278,6 +299,7 @@ export interface MacroXrayResponse {
   diagnostics: string[];
   source_status: DashboardSourceStatus[];
   methodology: string;
+  [key: string]: unknown;
 }
 
 export interface MacroXrayTarget {
@@ -285,14 +307,20 @@ export interface MacroXrayTarget {
   type: string;
   code: string;
   name: string;
+  label?: string;
+  shortLabel?: string;
+  sampleCount?: number;
+  latestPeriod?: string;
   source: string;
   status: DashboardSourceState;
+  [key: string]: unknown;
 }
 
 export interface MacroXrayTargetsResponse {
   ts: string;
   status: DashboardSourceState;
   items: MacroXrayTarget[];
+  targets?: MacroXrayTarget[];
   source_status: DashboardSourceStatus[];
   methodology: string;
 }

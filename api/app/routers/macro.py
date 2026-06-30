@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, Request
 
 from app.schemas.macro import MacroDashboardResponse, MacroTimeseriesResponse
 from app.services.macro import MacroDataService
+from app.services.macro_provider import macro_provider_for_settings
 
 router = APIRouter(prefix="/api/macro", tags=["macro"])
 
@@ -28,4 +29,8 @@ async def timeseries(
         service = MacroDataService()
         request.app.state.macro_service = service
     parsed_ids = [item.strip() for item in series_ids.split(",") if item.strip()] if series_ids else None
-    return await service.timeseries(series_ids=parsed_ids, start=start, end=end, max_points=max_points)
+    provider = getattr(request.app.state, "macro_provider", None)
+    if provider is None:
+        provider = macro_provider_for_settings(macro_service=service)
+        request.app.state.macro_provider = provider
+    return await provider.timeseries(series_ids=parsed_ids or [], start=start, end=end, max_points=max_points)

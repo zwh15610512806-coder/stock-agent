@@ -36,6 +36,7 @@ from app.schemas.market import (
 )
 from app.services.etfs import ETFService, ETF_SPOT_SOURCE
 from app.services.market_cache import CachedSnapshot, MarketSnapshotCache
+from app.services.runtime_paths import runtime_cache_path
 from app.services.symbols import (
     currency_for_market,
     display_name_for_symbol,
@@ -1599,7 +1600,7 @@ def _parse_optional_datetime(value: object) -> datetime | None:
 
 
 def _default_snapshot_cache_path() -> Path:
-    return Path(__file__).resolve().parents[3] / ".runtime" / "market_cache.sqlite3"
+    return runtime_cache_path(Path(__file__).resolve().parents[3], "market_cache.sqlite3")
 
 
 def _plain_code(symbol: str) -> str:

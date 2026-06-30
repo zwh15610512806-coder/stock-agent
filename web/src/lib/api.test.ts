@@ -67,7 +67,7 @@ describe("api client error classification", () => {
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      "/api/macro/timeseries?series_ids=cn.money.m1_yoy%2Ccn.ppi.yoy&start=2026-01-01&end=2026-06-30&max_points=40",
+      "/api/market/macro-timeseries?series_ids=cn.money.m1_yoy%2Ccn.ppi.yoy&start=2026-01-01&end=2026-06-30&max_points=40",
       expect.any(Object),
     );
     expect(fetch).toHaveBeenNthCalledWith(

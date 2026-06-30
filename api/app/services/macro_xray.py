@@ -129,6 +129,7 @@ class MacroXrayService:
             ts=datetime.now(UTC),
             status="live" if items else "unavailable",
             items=items,
+            targets=items,
             source_status=source_status,
             methodology="Targets come from static index presets and AkShare Eastmoney industry board names when available.",
         )
