@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import type { MacroDashboardResponse, MacroTimeseriesResponse, MacroXrayResponse, MacroXrayTargetsResponse } from "../lib/types";
 import { MacroPage } from "./MacroPage";
@@ -227,6 +227,11 @@ function renderMacroPage() {
 }
 
 describe("MacroPage workbench", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+  });
+
   it("keeps MacroPage source encoded as UTF-8 Chinese text", () => {
     const source = readFileSync(`${process.cwd()}/src/pages/MacroPage.tsx`, "utf8");
 

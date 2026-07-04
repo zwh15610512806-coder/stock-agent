@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 
+from app.routers.cache_headers import set_shared_cache_header
 from app.schemas.macro import MacroDashboardResponse, MacroTimeseriesResponse
 from app.services.macro import MacroDataService
 from app.services.macro_provider import macro_provider_for_settings
@@ -8,11 +9,12 @@ router = APIRouter(prefix="/api/macro", tags=["macro"])
 
 
 @router.get("/dashboard", response_model=MacroDashboardResponse)
-async def dashboard(request: Request) -> MacroDashboardResponse:
+async def dashboard(request: Request, response: Response) -> MacroDashboardResponse:
     service = getattr(request.app.state, "macro_service", None)
     if service is None:
         service = MacroDataService()
         request.app.state.macro_service = service
+    set_shared_cache_header(response, s_maxage=3600, stale_while_revalidate=86400)
     return await service.dashboard()
 
 

@@ -1,15 +1,30 @@
 import asyncio
-from datetime import UTC, date, datetime, timedelta
+import html
+import json
+import re
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from app.schemas.market import CandleSnapshot, MarketCode, QuoteSnapshot, SymbolSearchResult
+from app.config import get_settings
+from app.routers.cache_headers import set_shared_cache_header
+from app.routers.market_payloads import (
+    danginvest_intraday_dashboard,
+    danginvest_market_snapshot,
+    danginvest_market_status,
+    danginvest_news_response,
+    danginvest_realtime_dashboard,
+    danginvest_top_turnover_response,
+    quote_to_turnover_item,
+)
+from app.schemas.market import CandleSnapshot, MarketCode, MarketNewsItem, QuoteSnapshot, SymbolSearchResult
 from app.services.etfs import ETFService
 from app.services.macro import MacroDataService
 from app.services.macro_provider import macro_provider_for_settings
 from app.services.macro_xray import MacroXrayService
-from app.services.market import INDEX_SYMBOLS, MarketDataService
+from app.services.market import INDEX_SYMBOLS, MarketDataService, _records, _row_value, parse_cn_money, parse_pct
 from app.services.stocks import StockScreenerService
 from app.services.symbols import STATIC_SYMBOLS, _a_share_pool, normalize_symbol, resolve_symbol_query, search_static_symbols
 
@@ -97,47 +112,135 @@ async def time_machine_resolve(date: str = Query(..., min_length=10, max_length=
 
 @router.get("/market/status")
 async def market_status() -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "as_of": datetime.now(UTC),
-        "free_sources": [
-            "tencent-free-delayed",
-            "sina-free-delayed",
-            "Yahoo Finance/free delayed fallback",
-            "akshare-eastmoney-free",
-            "akshare-macro-free",
-        ],
-        "detail": "Backend is reachable; third-party sources are checked only by data endpoints.",
-    }
+    return danginvest_market_status()
 
 
 @router.get("/market/dashboard/realtime")
-async def market_dashboard_realtime(request: Request) -> Any:
-    return await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+async def market_dashboard_realtime(request: Request, response: Response) -> Any:
+    set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
+    try:
+        dashboard = await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+        return danginvest_realtime_dashboard(dashboard)
+    except Exception as exc:
+        fallback = await _danginvest_public_json(request, "/api/market/dashboard/realtime", {}, "danginvest:dashboard:realtime")
+        if fallback is not None:
+            return _mark_danginvest_fallback(fallback, "market_dashboard_realtime")
+        raise HTTPException(status_code=503, detail=f"market realtime dashboard unavailable: {exc}") from exc
 
 
 @router.get("/market/dashboard/intraday")
 async def market_dashboard_intraday(
     request: Request,
-    group: str = Query(default="indices-cn"),
+    groups: str = Query(default="indices-cn"),
+    group: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    requested = _requested_symbols("", group)
-    return _unavailable_series_response(
-        "intraday",
-        group,
-        requested,
-        "intraday free source is not connected; use /api/quotes?type=daily for historical daily series",
+    requested_groups = _parse_group_list(group or groups)
+    dashboard = await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+    payload = danginvest_intraday_dashboard(dashboard, requested_groups)
+    if payload["status"] == "live":
+        return payload
+    fallback = await _danginvest_public_json(
+        request,
+        "/api/market/dashboard/intraday",
+        {"groups": ",".join(requested_groups)},
+        f"danginvest:dashboard:intraday:{','.join(requested_groups)}",
     )
+    if fallback is not None:
+        return _mark_danginvest_fallback(fallback, "market_dashboard_intraday")
+    return payload
+
+
+@router.get("/market/news")
+async def market_news(
+    request: Request,
+    response: Response,
+    limit: int = Query(default=120, ge=1, le=120),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
+    dashboard = await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+    local = danginvest_news_response(dashboard.market_news, limit, offset, dashboard.as_of)
+    if local["count"] >= offset + limit or local["data"]:
+        return local
+    sina_fallback = await _sina_public_news_response(request, limit, offset)
+    if sina_fallback is not None:
+        return sina_fallback
+    fallback = await _danginvest_public_json(
+        request,
+        "/api/market/news",
+        {"limit": str(limit), "offset": str(offset)},
+        f"danginvest:market:news:{limit}:{offset}",
+        ttl_seconds=60,
+    )
+    if fallback is not None:
+        return _mark_danginvest_fallback(fallback, "market_news")
+    return local
+
+
+@router.get("/market/stocks/top-turnover")
+async def market_top_turnover(
+    request: Request,
+    response: Response,
+    market: str = Query(default="cn"),
+    limit: int = Query(default=10, ge=1, le=100),
+    date: str | None = Query(default=None, min_length=10, max_length=10),
+) -> dict[str, Any]:
+    set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
+    items = await _top_turnover_items(_market_service(request), market, limit)
+    if not items:
+        fallback = await _danginvest_public_json(
+            request,
+            "/api/market/stocks/top-turnover",
+            {"market": market.lower(), "limit": str(limit), **({"date": date} if date else {})},
+            f"danginvest:top-turnover:{market.lower()}:{date or 'latest'}:{limit}",
+            ttl_seconds=60,
+        )
+        if fallback is not None:
+            return _mark_danginvest_fallback(fallback, "top_turnover")
+    return danginvest_top_turnover_response(items, market.lower(), limit, date)
+
+
+@router.get("/market")
+async def market_date_snapshot(
+    request: Request,
+    response: Response,
+    date: str | None = Query(default=None, min_length=10, max_length=10),
+) -> dict[str, Any]:
+    set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
+    service = _market_service(request)
+    try:
+        dashboard = await service.dashboard(["CN", "HK", "US"], "daily")
+    except Exception as exc:
+        fallback = await _danginvest_public_json(
+            request,
+            "/api/market",
+            {"date": date} if date else {},
+            f"danginvest:market:snapshot:{date or 'latest'}",
+            ttl_seconds=60,
+        )
+        if fallback is not None:
+            return _mark_danginvest_fallback(fallback, "market_snapshot")
+        raise HTTPException(status_code=503, detail=f"market snapshot unavailable: {exc}") from exc
+    top_turnover = danginvest_top_turnover_response(
+        await _top_turnover_items(service, "cn", 10),
+        "cn",
+        10,
+        date,
+        dashboard.as_of,
+    )
+    return danginvest_market_snapshot(dashboard, top_turnover, date)
 
 
 @router.get("/market/macro-timeseries")
 async def macro_timeseries(
     request: Request,
+    response: Response,
     series_ids: str = Query(default=""),
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
     max_points: int = Query(default=600, ge=1, le=5000),
 ) -> Any:
+    set_shared_cache_header(response, s_maxage=3600, stale_while_revalidate=86400)
     if series_ids.strip():
         parsed_ids = [item.strip() for item in series_ids.split(",") if item.strip()]
         return await _macro_provider(request).timeseries(
@@ -172,6 +275,7 @@ async def macro_timeseries(
 @router.get("/market/macro-xray")
 async def macro_xray(
     request: Request,
+    response: Response,
     universe_type: str = Query(default="index"),
     universe_code: str = Query(default="000300.SH"),
     scope: str = Query(default="non_financial"),
@@ -179,6 +283,7 @@ async def macro_xray(
     quarters: int = Query(default=40, ge=1, le=80),
     lookback: int = Query(default=6, ge=1, le=24),
 ) -> Any:
+    set_shared_cache_header(response, s_maxage=3600, stale_while_revalidate=86400)
     return await _macro_provider(request).xray(
         universe_type=universe_type,
         universe_code=universe_code,
@@ -192,10 +297,12 @@ async def macro_xray(
 @router.get("/market/macro-xray/targets")
 async def macro_xray_targets(
     request: Request,
+    response: Response,
     universe_type: str = Query(default="index"),
     lookback: int = Query(default=6, ge=1, le=24),
     target_source: str = Query(default="stock_basic_full_v1"),
 ) -> Any:
+    set_shared_cache_header(response, s_maxage=3600, stale_while_revalidate=86400)
     return await _macro_provider(request).targets(
         universe_type=universe_type,
         lookback=lookback,
@@ -504,6 +611,258 @@ def _requested_symbols(symbols: str, group: str) -> list[str]:
     if symbols.strip():
         return [resolve_symbol_query(item, None) for item in symbols.split(",") if item.strip()]
     return INDEX_GROUPS.get(group, INDEX_GROUPS["indices-all"])
+
+
+def _parse_group_list(value: str) -> list[str]:
+    groups = [item.strip() for item in value.split(",") if item.strip()]
+    return groups or ["indices-cn"]
+
+
+async def _sina_public_news_response(request: Request, limit: int, offset: int) -> dict[str, Any] | None:
+    service = _market_service(request)
+    cache = getattr(service, "snapshot_cache", None)
+    cache_key = f"sina:market:news:{limit}:{offset}"
+    cached = cache.get(cache_key) if cache is not None else None
+    if cached is not None and not cached.is_stale and isinstance(cached.payload, dict):
+        return cached.payload
+
+    fetcher = getattr(request.app.state, "market_news_fallback_fetcher", None)
+    try:
+        if fetcher is not None:
+            payload = await _maybe_await(fetcher(limit, offset))
+        else:
+            payload = await _fetch_sina_market_news_json(limit, offset)
+        items = _sina_news_items_from_payload(payload)
+    except Exception:
+        if cached is not None and isinstance(cached.payload, dict):
+            stale_payload = dict(cached.payload)
+            stale_payload["stale"] = True
+            return stale_payload
+        return None
+
+    if not items:
+        return None
+    response = danginvest_news_response(items, limit, 0, datetime.now(UTC))
+    response["offset"] = offset
+    response["count"] = offset + len(items) + (limit if len(items) >= limit else 0)
+    response["has_more"] = len(items) >= limit
+    response["source_status"] = [
+        {
+            "name": "market_news",
+            "status": "live",
+            "source": "sina-7x24",
+            "detail": "served from Sina 7x24 public JSON feed",
+            "as_of": datetime.now(UTC).isoformat(),
+        }
+    ]
+    if cache is not None:
+        cache.save(cache_key, response, "sina-7x24", 60)
+    return response
+
+
+async def _fetch_sina_market_news_json(limit: int, offset: int) -> dict[str, Any]:
+    page_size = max(1, min(limit, 120))
+    page = max(1, offset // page_size + 1)
+    async with httpx.AsyncClient(timeout=8.0, trust_env=False, follow_redirects=True) as client:
+        response = await client.get(
+            "https://zhibo.sina.com.cn/api/zhibo/feed",
+            params={"page": page, "page_size": page_size, "zhibo_id": 152},
+            headers={"user-agent": "Mozilla/5.0"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("sina 7x24 returned invalid payload")
+    return payload
+
+
+def _sina_news_items_from_payload(payload: dict[str, Any]) -> list[MarketNewsItem]:
+    feed = (((payload.get("result") or {}).get("data") or {}).get("feed") or {}).get("list") or []
+    if not isinstance(feed, list):
+        return []
+    items: list[MarketNewsItem] = []
+    for row in feed:
+        if not isinstance(row, dict):
+            continue
+        text = _clean_sina_rich_text(row.get("rich_text"))
+        if not text:
+            continue
+        title, content = _split_sina_news_text(text)
+        items.append(
+            MarketNewsItem(
+                title=title,
+                content=content,
+                published_at=_parse_sina_news_time(row.get("create_time")),
+                source="sina-7x24",
+                url=_sina_news_url(row),
+            )
+        )
+    return items
+
+
+def _clean_sina_rich_text(value: object) -> str:
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _split_sina_news_text(text: str) -> tuple[str, str]:
+    match = re.match(r"^【(.+?)】\s*(.*)$", text)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    title = text[:72].strip()
+    return title, text
+
+
+def _parse_sina_news_time(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).replace(tzinfo=timezone(timedelta(hours=8)))
+    except ValueError:
+        return None
+
+
+def _sina_news_url(row: dict[str, Any]) -> str:
+    raw_ext = row.get("ext")
+    if isinstance(raw_ext, str) and raw_ext.strip():
+        try:
+            parsed = json.loads(raw_ext)
+            docurl = parsed.get("docurl")
+            if isinstance(docurl, str):
+                return docurl.replace("\\/", "/")
+        except json.JSONDecodeError:
+            pass
+    return ""
+
+
+async def _maybe_await(value: Any) -> Any:
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+async def _danginvest_public_json(
+    request: Request,
+    path: str,
+    params: dict[str, str],
+    cache_key: str,
+    ttl_seconds: int = 30,
+) -> dict[str, Any] | None:
+    service = _market_service(request)
+    cache = getattr(service, "snapshot_cache", None)
+    cached = cache.get(cache_key) if cache is not None else None
+    if cached is not None and not cached.is_stale and isinstance(cached.payload, dict):
+        return _mark_danginvest_fallback(dict(cached.payload), "danginvest_public_cache", stale=False)
+
+    settings = getattr(request.app.state, "settings", None) or get_settings()
+    base_url = str(getattr(settings, "danginvest_base_url", "https://dang-invest.com")).rstrip("/")
+    timeout_seconds = float(getattr(settings, "danginvest_timeout_seconds", 8.0))
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
+            response = await client.get(f"{base_url}{path}", params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except Exception:
+        if cached is not None and isinstance(cached.payload, dict):
+            return _mark_danginvest_fallback(dict(cached.payload), "danginvest_public_cache", stale=True)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if cache is not None:
+        cache.save(cache_key, payload, "danginvest-public-fallback", ttl_seconds)
+    return _mark_danginvest_fallback(payload, "danginvest_public_fallback", stale=False)
+
+
+def _mark_danginvest_fallback(payload: dict[str, Any], name: str, stale: bool | None = None) -> dict[str, Any]:
+    marked = dict(payload)
+    if stale is not None:
+        marked["stale"] = stale
+    source_status = list(marked.get("source_status") or [])
+    source_status.append(
+        {
+            "name": name,
+            "status": "stale" if stale else "live",
+            "source": "danginvest-public-fallback",
+            "detail": "served from SQLite cache" if stale else "served from DangInvest public API fallback",
+            "as_of": datetime.now(UTC).isoformat(),
+        }
+    )
+    marked["source_status"] = source_status
+    meta = marked.get("meta")
+    if isinstance(meta, dict):
+        meta = dict(meta)
+        meta["fallbackSource"] = "danginvest-public-fallback"
+        marked["meta"] = meta
+    return marked
+
+
+async def _top_turnover_items(service: Any, market: str, limit: int) -> list[dict[str, Any]]:
+    market_key = market.lower()
+    spot_items = await asyncio.to_thread(_spot_turnover_items_sync, service, market_key, limit)
+    if spot_items:
+        return spot_items
+    return await _quote_turnover_items(service, market_key, limit)
+
+
+def _spot_turnover_items_sync(service: Any, market: str, limit: int) -> list[dict[str, Any]]:
+    if market not in {"cn", "a", "ashare"} or not hasattr(service, "_akshare"):
+        return []
+    try:
+        rows = _records(service._akshare().stock_zh_a_spot_em())
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        code = str(_row_value(row, ("代码", "股票代码", "code", "symbol")) or "").strip()
+        if not code:
+            continue
+        turnover = parse_cn_money(_row_value(row, ("成交额", "turnover", "amount")))
+        if turnover <= 0:
+            continue
+        items.append(
+            {
+                "code": code,
+                "symbol": _a_share_symbol_from_code(code),
+                "name": str(_row_value(row, ("名称", "股票简称", "name")) or code),
+                "price": parse_cn_money(_row_value(row, ("最新价", "收盘", "现价", "price"))),
+                "changePct": parse_pct(_row_value(row, ("涨跌幅", "change_pct", "涨幅"))),
+                "change_pct": parse_pct(_row_value(row, ("涨跌幅", "change_pct", "涨幅"))),
+                "turnoverYuan": turnover,
+                "turnover": turnover,
+                "source": "akshare-eastmoney-a-spot",
+            }
+        )
+    return sorted(items, key=lambda item: item["turnoverYuan"], reverse=True)[:limit]
+
+
+async def _quote_turnover_items(service: Any, market: str, limit: int) -> list[dict[str, Any]]:
+    symbols = _turnover_candidate_symbols(market, limit)
+    results = await asyncio.gather(*(_real_quote(service, symbol) for symbol in symbols), return_exceptions=True)
+    quotes = [result for result in results if isinstance(result, QuoteSnapshot)]
+    return [quote_to_turnover_item(quote) for quote in sorted(quotes, key=lambda item: item.turnover, reverse=True)[:limit]]
+
+
+def _turnover_candidate_symbols(market: str, limit: int) -> list[str]:
+    if market in {"hk", "h"}:
+        return [symbol for symbol, _ in INDEX_SYMBOLS["HK"]][:limit]
+    if market in {"us", "usa"}:
+        return [symbol for symbol, _ in INDEX_SYMBOLS["US"]][:limit]
+    core = ["600519.SH", "300750.SZ", "601318.SH", "000858.SZ", "002594.SZ", "600036.SH"]
+    return core[: max(limit, 1)]
+
+
+def _a_share_symbol_from_code(code: str) -> str:
+    value = code.strip()
+    if value.upper().endswith((".SH", ".SZ", ".BJ")):
+        return value.upper()
+    if value.startswith(("6", "9")):
+        return f"{value}.SH"
+    if value.startswith(("8", "4")):
+        return f"{value}.BJ"
+    return f"{value}.SZ"
 
 
 def _parse_markets(value: str) -> set[MarketCode]:

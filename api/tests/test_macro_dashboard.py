@@ -115,6 +115,7 @@ def test_macro_dashboard_endpoint_contract(tmp_path) -> None:
     response = client.get("/api/macro/dashboard")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400"
     body = response.json()
     assert set(body) == {
         "as_of",

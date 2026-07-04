@@ -81,4 +81,31 @@ describe("api client error classification", () => {
       expect.any(Object),
     );
   });
+
+  it("requests DangInvest-style market endpoints with stable query parameters", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", { status: 200 })));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.marketStatus();
+    await api.marketDashboardRealtime();
+    await api.marketIntraday(["indices-cn", "indices-hk"]);
+    await api.marketNews(120, 40);
+    await api.marketTopTurnover("cn", 20, "2026-07-02");
+    await api.marketDateSnapshot("2026-07-02");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/market/status", expect.any(Object));
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/market/dashboard/realtime", expect.any(Object));
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/api/market/dashboard/intraday?groups=indices-cn%2Cindices-hk",
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(4, "/api/market/news?limit=120&offset=40", expect.any(Object));
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      "/api/market/stocks/top-turnover?market=cn&limit=20&date=2026-07-02",
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(6, "/api/market?date=2026-07-02", expect.any(Object));
+  });
 });

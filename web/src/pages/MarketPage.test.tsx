@@ -1,13 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
-import type { MarketDashboardResponse } from "../lib/types";
+import type { MarketDashboardResponse, MarketNewsResponse, MarketStatusResponse, TopTurnoverResponse } from "../lib/types";
 import { MarketPage } from "./MarketPage";
 
 vi.mock("../lib/api", () => ({
   api: {
     marketDashboard: vi.fn(),
+    marketStatus: vi.fn(),
+    marketNews: vi.fn(),
+    marketTopTurnover: vi.fn(),
   },
 }));
 
@@ -147,6 +150,17 @@ const dashboard: MarketDashboardResponse = {
       as_of: "2026-06-23T14:57:00+08:00",
       sparkline: [917.84, 918.21],
     },
+    {
+      symbol: "CL00Y",
+      name: "NYMEX原油",
+      price: 81.4,
+      change: -0.7,
+      change_pct: -0.85,
+      unit: "USD/bbl",
+      source: "eastmoney-global-futures",
+      as_of: "2026-06-23T14:57:00+08:00",
+      sparkline: [82.1, 81.8, 81.4],
+    },
   ],
   dragon_tiger: [
     {
@@ -216,6 +230,79 @@ const dashboard: MarketDashboardResponse = {
   disclaimer: "免费公开源可能延迟、缺失或被缓存。",
 };
 
+const marketStatus: MarketStatusResponse = {
+  ts: "2026-06-23T15:00:00Z",
+  timestamp: 1782207600000,
+  weekday: 2,
+  weekday_name: "周二",
+  data: [
+    {
+      market: "cn",
+      name: "A股",
+      is_trading: false,
+      status: "closed",
+      status_text: "休市",
+      calendar_ok: true,
+      calendar_market: "cn",
+      is_trade_day: true,
+      trade_date: "2026-06-23",
+      prev_trade_date: "2026-06-22",
+    },
+    {
+      market: "hk",
+      name: "港股",
+      is_trading: false,
+      status: "closed",
+      status_text: "休市",
+      calendar_ok: true,
+      calendar_market: "hk",
+      is_trade_day: true,
+      trade_date: "2026-06-23",
+      prev_trade_date: "2026-06-22",
+    },
+  ],
+};
+
+const marketNews: MarketNewsResponse = {
+  ts: "2026-06-23T15:10:00Z",
+  count: 2,
+  limit: 120,
+  offset: 0,
+  has_more: false,
+  data: dashboard.market_news.map((item, index) => ({ ...item, id: `news-${index}` })),
+};
+
+const topTurnover: TopTurnoverResponse = {
+  mode: "top-turnover",
+  limit: 10,
+  stale: false,
+  tradeDate: "2026-06-23",
+  data: {
+    count: 2,
+    items: [
+      {
+        code: "600519",
+        symbol: "600519.SH",
+        name: "贵州茅台",
+        price: 1520.5,
+        changePct: 1.2,
+        turnoverYuan: 4020000000,
+        source: "akshare-eastmoney-a-spot",
+      },
+      {
+        code: "300750",
+        symbol: "300750.SZ",
+        name: "宁德时代",
+        price: 210,
+        changePct: -0.5,
+        turnoverYuan: 3200000000,
+        source: "akshare-eastmoney-a-spot",
+      },
+    ],
+  },
+  asOf: "2026-06-23T15:00:00Z",
+};
+
 function renderMarketPage() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -230,6 +317,14 @@ function renderMarketPage() {
 }
 
 describe("MarketPage dashboard", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(api.marketStatus).mockResolvedValue(marketStatus);
+    vi.mocked(api.marketNews).mockResolvedValue(marketNews);
+    vi.mocked(api.marketTopTurnover).mockResolvedValue(topTurnover);
+  });
+
   it("shows a loading state while the dashboard request is still pending", () => {
     vi.mocked(api.marketDashboard).mockReturnValue(new Promise(() => {}));
 
@@ -247,9 +342,13 @@ describe("MarketPage dashboard", () => {
     renderMarketPage();
 
     expect(await screen.findByText("市场全景")).toBeTruthy();
+    expect(await screen.findByText("A股")).toBeTruthy();
+    expect(screen.getAllByText("休市").length).toBeGreaterThan(0);
     expect(screen.getByText("全球指数")).toBeTruthy();
     expect(screen.getByText("市场脉搏")).toBeTruthy();
     expect(await screen.findByText("1.02万亿")).toBeTruthy();
+    expect(screen.getByText("成交额榜")).toBeTruthy();
+    expect(screen.getAllByText("贵州茅台").length).toBeGreaterThan(0);
     expect(screen.getByText("7x24快讯")).toBeTruthy();
     expect(screen.getByText("板块热力图")).toBeTruthy();
     const heatmapLimitSelect = screen.getByLabelText("热力图显示数量") as HTMLSelectElement;
@@ -257,7 +356,7 @@ describe("MarketPage dashboard", () => {
     expect(heatmapLimitSelect.value).toBe("60");
     expect(screen.getByText("大宗商品")).toBeTruthy();
     expect(screen.getByText("龙虎榜")).toBeTruthy();
-    expect(await screen.findByText("贵州茅台")).toBeTruthy();
+    expect((await screen.findAllByText("贵州茅台")).length).toBeGreaterThan(0);
     expect(screen.getByText("上证指数")).toBeTruthy();
     expect(screen.getAllByText(/银行/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("tab", { name: "ETF" }));
@@ -274,12 +373,72 @@ describe("MarketPage dashboard", () => {
     expect(screen.getByText("模型搜索快讯")).toBeTruthy();
     expect(screen.getByText("央行开展公开市场操作")).toBeTruthy();
     expect(screen.getByText("黄金连续")).toBeTruthy();
+    expect(screen.getByText("NYMEX原油")).toBeTruthy();
     expect(screen.getByText("蓝黛科技")).toBeTruthy();
     expect(screen.getAllByText(/缓存/).length).toBeGreaterThan(0);
     expect(screen.getByText(/部分免费数据源超时/)).toBeTruthy();
     expect(screen.queryByText(/数据源暂不可用/)).toBeNull();
     expect(screen.queryByText("大盘趋势")).toBeNull();
     expect(screen.queryByText("市场情绪")).toBeNull();
+  });
+
+  it("supports news paging, timeline slider, and commodity controls", async () => {
+    vi.mocked(api.marketDashboard).mockResolvedValue(dashboard);
+    vi.mocked(api.marketNews)
+      .mockResolvedValueOnce({ ...marketNews, has_more: true })
+      .mockResolvedValueOnce({
+        ...marketNews,
+        count: 3,
+        offset: 2,
+        has_more: false,
+        data: [
+          {
+            id: "news-2",
+            title: "补充快讯",
+            content: "加载更多返回的真实快讯",
+            published_at: "2026-06-23T13:00:00+08:00",
+            source: "danginvest-public-fallback",
+            url: "",
+          },
+        ],
+      });
+
+    renderMarketPage();
+
+    expect(await screen.findByLabelText("快讯时间轴")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("快讯时间轴"), { target: { value: "50" } });
+    expect(screen.getByText(/定位 50%/)).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
+    expect(api.marketNews).toHaveBeenLastCalledWith(120, 2);
+    expect(await screen.findByText("补充快讯")).toBeTruthy();
+
+    expect(screen.getByRole("button", { name: "贵金属" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "海外" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "海外" }));
+    expect(screen.getByText("NYMEX原油")).toBeTruthy();
+    expect(screen.queryByText("黄金连续")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "周线" }));
+    expect(screen.getByText("周期 周线")).toBeTruthy();
+  });
+
+  it("refreshes dashboard side queries including news", async () => {
+    vi.mocked(api.marketDashboard).mockResolvedValue(dashboard);
+
+    renderMarketPage();
+
+    await screen.findByText("市场全景");
+    const newsCalls = vi.mocked(api.marketNews).mock.calls.length;
+    const statusCalls = vi.mocked(api.marketStatus).mock.calls.length;
+    const turnoverCalls = vi.mocked(api.marketTopTurnover).mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(api.marketNews).mock.calls.length).toBeGreaterThan(newsCalls);
+      expect(vi.mocked(api.marketStatus).mock.calls.length).toBeGreaterThan(statusCalls);
+      expect(vi.mocked(api.marketTopTurnover).mock.calls.length).toBeGreaterThan(turnoverCalls);
+    });
   });
 
   it("does not show page warning when only optional sources are unavailable", async () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -13,6 +13,7 @@ import { Heatmap, type HeatmapAreaMetric } from "../components/Heatmap";
 import { SourceStatusBadge } from "../components/SourceStatusBadge";
 import { api } from "../lib/api";
 import { formatCompact, formatMoney, formatNumber, toneForPct } from "../lib/format";
+import { readPersistedQuery, writePersistedQuery } from "../lib/persisted-query";
 import type {
   AShareActivity,
   CommodityQuote,
@@ -20,12 +21,17 @@ import type {
   DashboardCacheStatus,
   DashboardHeatItem,
   FundFlowSummary,
+  MarketDashboardResponse,
   MarketNewsItem,
+  MarketStatusItem,
+  TopTurnoverResponse,
   QuoteSnapshot,
 } from "../lib/types";
 
 type HeatmapGroupKey = "etf" | "industry" | "sector" | "concept" | "region";
 type DragonTigerSortKey = "net_inflow" | "net_outflow" | "rise_pct" | "fall_pct" | "turnover";
+type CommodityGroupKey = "all" | "metals" | "domestic" | "overseas";
+type CommodityPeriodKey = "日内" | "日线" | "周线" | "月线";
 
 const HEATMAP_GROUP_ORDER: HeatmapGroupKey[] = ["etf", "industry", "sector", "region", "concept"];
 
@@ -61,15 +67,66 @@ const DRAGON_TIGER_SORT_OPTIONS: Array<{ value: DragonTigerSortKey; label: strin
   { value: "turnover", label: "成交额" },
 ];
 
+const MARKET_DASHBOARD_SNAPSHOT_KEY = "market-dashboard:reference-overview";
+const MARKET_DASHBOARD_SNAPSHOT_MAX_AGE_MS = 15 * 60 * 1000;
+const MARKET_DASHBOARD_STALE_MS = 30 * 1000;
+const MARKET_NEWS_PAGE_SIZE = 120;
+
 export function MarketPage() {
   const [heatmapGroup, setHeatmapGroup] = useState<HeatmapGroupKey>("industry");
   const [heatmapMetric, setHeatmapMetric] = useState<HeatmapAreaMetric>("turnover");
   const [heatmapLimit, setHeatmapLimit] = useState(60);
+  const [loadedNews, setLoadedNews] = useState<MarketNewsItem[]>([]);
+  const [newsHasMore, setNewsHasMore] = useState(false);
+  const [newsTotal, setNewsTotal] = useState(0);
+  const [newsLoadingMore, setNewsLoadingMore] = useState(false);
   const dashboard = useQuery({
     queryKey: ["market-dashboard", "reference-overview"],
     queryFn: () => api.marketDashboard(["CN", "HK", "US"], "daily"),
+    initialData: () =>
+      readPersistedQuery<MarketDashboardResponse>(MARKET_DASHBOARD_SNAPSHOT_KEY, {
+        maxAgeMs: MARKET_DASHBOARD_SNAPSHOT_MAX_AGE_MS,
+      })?.data,
+    initialDataUpdatedAt: () =>
+      readPersistedQuery<MarketDashboardResponse>(MARKET_DASHBOARD_SNAPSHOT_KEY, {
+        maxAgeMs: MARKET_DASHBOARD_SNAPSHOT_MAX_AGE_MS,
+      })?.updatedAt,
+    staleTime: MARKET_DASHBOARD_STALE_MS,
+  });
+  const marketStatus = useQuery({
+    queryKey: ["market-status"],
+    queryFn: () => api.marketStatus(),
+    staleTime: 60 * 1000,
+  });
+  const marketNews = useQuery({
+    queryKey: ["market-news", MARKET_NEWS_PAGE_SIZE, 0],
+    queryFn: () => api.marketNews(MARKET_NEWS_PAGE_SIZE, 0),
+    enabled: Boolean(dashboard.data),
+    staleTime: MARKET_DASHBOARD_STALE_MS,
+  });
+  const topTurnover = useQuery({
+    queryKey: ["market-top-turnover", "cn"],
+    queryFn: () => api.marketTopTurnover("cn", 10),
+    enabled: Boolean(dashboard.data),
+    staleTime: MARKET_DASHBOARD_STALE_MS,
   });
   const data = dashboard.data;
+  useEffect(() => {
+    if (dashboard.data) {
+      writePersistedQuery(MARKET_DASHBOARD_SNAPSHOT_KEY, dashboard.data, dashboard.dataUpdatedAt || Date.now());
+    }
+  }, [dashboard.data, dashboard.dataUpdatedAt]);
+  useEffect(() => {
+    if (marketNews.data) {
+      setLoadedNews(marketNews.data.data);
+      setNewsHasMore(marketNews.data.has_more);
+      setNewsTotal(marketNews.data.count);
+    } else if (data?.market_news?.length && !marketNews.isFetching) {
+      setLoadedNews(data.market_news);
+      setNewsHasMore(false);
+      setNewsTotal(data.market_news.length);
+    }
+  }, [data?.market_news, marketNews.data, marketNews.isFetching]);
   const isInitialLoading = dashboard.isPending && !data;
   const indexQuotes = data?.markets.flatMap((market) => market.indices) || [];
   const aShare = data?.markets.find((market) => market.market === "CN");
@@ -99,6 +156,28 @@ export function MarketPage() {
   const sourceWarning = isInitialLoading
     ? ""
     : marketSourceWarning(dashboard.isError, data?.cache_status);
+  const newsForDisplay = loadedNews.length ? loadedNews : data?.market_news || [];
+
+  const handleLoadMoreNews = async () => {
+    if (newsLoadingMore) {
+      return;
+    }
+    setNewsLoadingMore(true);
+    try {
+      const next = await api.marketNews(MARKET_NEWS_PAGE_SIZE, newsForDisplay.length);
+      setLoadedNews((current) => mergeNewsItems(current.length ? current : newsForDisplay, next.data));
+      setNewsHasMore(next.has_more);
+      setNewsTotal(next.count);
+    } finally {
+      setNewsLoadingMore(false);
+    }
+  };
+  const handleRefresh = () => {
+    dashboard.refetch();
+    marketStatus.refetch();
+    marketNews.refetch();
+    topTurnover.refetch();
+  };
 
   return (
     <div className="market-overview-board">
@@ -107,11 +186,12 @@ export function MarketPage() {
           <span className="market-kicker">进入资金信号沙盘</span>
           <h2>市场全景</h2>
           <p>聚合全球指数、A股脉搏、快讯、板块资金、大宗商品和龙虎榜，所有模块仅展示真实源或缓存。</p>
+          <MarketStatusChips items={marketStatus.data?.data || []} />
         </div>
         <div className="market-hero-actions">
           <span className="market-clock">更新 {isInitialLoading ? "加载中" : formatDateTime(data?.as_of)}</span>
           <SourceStatusBadge status={isInitialLoading ? "loading" : data?.cache_status || "unavailable"} />
-          <button className="terminal-button soft market-refresh" onClick={() => dashboard.refetch()} type="button">
+          <button className="terminal-button soft market-refresh" onClick={handleRefresh} type="button">
             <RefreshCw size={15} />
             刷新
           </button>
@@ -166,11 +246,22 @@ export function MarketPage() {
         </div>
         {isInitialLoading ? <MarketLoading title="正在加载涨跌家数" compact /> : <BreadthBar activity={data?.a_share_activity || null} />}
         {isInitialLoading ? <MarketLoading title="正在加载资金流" compact /> : <FundFlowStrip summary={data?.fund_flow_summary || null} />}
+        {isInitialLoading ? null : <TopTurnoverStrip data={topTurnover.data} />}
       </section>
 
       <section className="market-block news-block">
         <SectionTitle icon={Newspaper} title="7x24快讯" subtitle="全局财经快讯，按发布时间倒序" />
-        {isInitialLoading ? <MarketLoading title="正在加载真实快讯" /> : <NewsTimeline news={data?.market_news || []} />}
+        {isInitialLoading ? (
+          <MarketLoading title="正在加载真实快讯" />
+        ) : (
+          <NewsTimeline
+            news={newsForDisplay}
+            totalCount={newsTotal || newsForDisplay.length}
+            hasMore={newsHasMore}
+            loadingMore={newsLoadingMore}
+            onLoadMore={handleLoadMoreNews}
+          />
+        )}
       </section>
 
       <section className="market-block heatmap-board">
@@ -278,6 +369,23 @@ function SectionTitle({
   );
 }
 
+function MarketStatusChips({ items }: { items: MarketStatusItem[] }) {
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="market-status-chips" aria-label="市场交易状态">
+      {items.slice(0, 5).map((item) => (
+        <span className={item.is_trading ? "trading" : ""} key={item.market}>
+          <strong>{item.name}</strong>
+          {item.status_text}
+          <small>{item.trade_date}</small>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function IndexCard({ quote, values }: { quote: QuoteSnapshot; values: number[] }) {
   const tone = toneForPct(quote.change_pct);
   return (
@@ -339,6 +447,32 @@ function PulseMetric({
   );
 }
 
+function TopTurnoverStrip({ data }: { data?: TopTurnoverResponse }) {
+  const rows = data?.data.items || [];
+  if (!rows.length) {
+    return null;
+  }
+  return (
+    <div className="top-turnover-strip">
+      <div>
+        <strong>成交额榜</strong>
+        <span>{data?.tradeDate || "--"}</span>
+      </div>
+      {rows.slice(0, 5).map((item) => {
+        const tone = toneForPct(item.changePct || item.change_pct || 0);
+        return (
+          <article key={item.symbol || item.code}>
+            <strong>{item.name}</strong>
+            <span>{item.code}</span>
+            <small className={`tone-text ${tone}`}>{formatSignedPct(item.changePct || item.change_pct || 0)}</small>
+            <small>{formatMoney(item.turnoverYuan || item.turnover || 0)}</small>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function BreadthBar({ activity }: { activity: AShareActivity | null }) {
   if (!activity) {
     return <MarketEmpty title="暂无真实涨跌家数" compact />;
@@ -382,7 +516,19 @@ function FundFlowStrip({ summary }: { summary: FundFlowSummary | null }) {
   );
 }
 
-function NewsTimeline({ news }: { news: MarketNewsItem[] }) {
+function NewsTimeline({
+  news,
+  totalCount,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  news: MarketNewsItem[];
+  totalCount: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   if (!news.length) {
     return <MarketEmpty title="暂无真实快讯" />;
   }
@@ -397,11 +543,11 @@ function NewsTimeline({ news }: { news: MarketNewsItem[] }) {
     <div className="news-live-panel">
       <div className="news-live-meta">
         <span>近24小时</span>
-        <span>已加载 {sortedNews.length} 条</span>
+        <span>已加载 {sortedNews.length} 条{totalCount > sortedNews.length ? ` / ${totalCount}` : ""}</span>
       </div>
       <NewsTimeAxis start={start} end={latest} latest={latest} />
       <div className="news-timeline">
-        {sortedNews.slice(0, 12).map((item) => (
+        {sortedNews.slice(0, 30).map((item) => (
           <a href={item.url || undefined} key={`${item.published_at}-${item.title}-${item.url}`} target={item.url ? "_blank" : undefined} rel="noreferrer">
             <time>{formatNewsTime(item.published_at)}</time>
             <span className="news-source-pill">{item.source}</span>
@@ -410,11 +556,17 @@ function NewsTimeline({ news }: { news: MarketNewsItem[] }) {
           </a>
         ))}
       </div>
+      {hasMore ? (
+        <button className="terminal-button soft news-load-more" disabled={loadingMore} onClick={onLoadMore} type="button">
+          {loadingMore ? "加载中" : "加载更多"}
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function NewsTimeAxis({ start, end, latest }: { start: Date; end: Date; latest: Date }) {
+  const [position, setPosition] = useState(100);
   const ticks = buildTimelineTicks(start, end);
   return (
     <div className="news-axis" aria-label="近24小时快讯时间轴">
@@ -424,10 +576,19 @@ function NewsTimeAxis({ start, end, latest }: { start: Date; end: Date; latest: 
       </div>
       <div className="news-axis-track">
         <span className="news-axis-fill" />
-        <span className="news-axis-latest" style={{ left: `${newsPositionPct(latest, start, end)}%` }}>
-          最新资讯
+        <span className="news-axis-latest" style={{ left: `${position}%` }}>
+          {position === 100 ? "最新资讯" : `定位 ${position}%`}
         </span>
       </div>
+      <input
+        aria-label="快讯时间轴"
+        className="news-axis-slider"
+        max={100}
+        min={0}
+        onChange={(event) => setPosition(Number(event.target.value))}
+        type="range"
+        value={position}
+      />
       <div className="news-axis-ticks">
         {ticks.map((tick) => (
           <span key={tick.toISOString()}>{formatAxisTime(tick)}</span>
@@ -438,12 +599,50 @@ function NewsTimeAxis({ start, end, latest }: { start: Date; end: Date; latest: 
 }
 
 function CommodityPanel({ quotes }: { quotes: CommodityQuote[] }) {
+  const [group, setGroup] = useState<CommodityGroupKey>("all");
+  const [period, setPeriod] = useState<CommodityPeriodKey>("日内");
   if (!quotes.length) {
     return <MarketEmpty title="暂无真实商品行情" />;
   }
+  const filteredQuotes = quotes.filter((quote) => commodityMatchesGroup(quote, group));
   return (
-    <div className="commodity-list">
-      {quotes.map((quote) => {
+    <div className="commodity-panel">
+      <div className="commodity-controls">
+        <div className="commodity-tabs" aria-label="商品分类">
+          {[
+            ["all", "全部"],
+            ["metals", "贵金属"],
+            ["domestic", "国内"],
+            ["overseas", "海外"],
+          ].map(([value, label]) => (
+            <button
+              aria-pressed={group === value}
+              className={group === value ? "active" : ""}
+              key={value}
+              onClick={() => setGroup(value as CommodityGroupKey)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="commodity-tabs" aria-label="商品周期">
+          {(["日内", "日线", "周线", "月线"] as CommodityPeriodKey[]).map((value) => (
+            <button
+              aria-pressed={period === value}
+              className={period === value ? "active" : ""}
+              key={value}
+              onClick={() => setPeriod(value)}
+              type="button"
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+      <span className="commodity-period-label">周期 {period}</span>
+      <div className="commodity-list">
+      {filteredQuotes.map((quote) => {
         const tone = toneForPct(quote.change_pct);
         return (
           <div className="commodity-row" key={`${quote.source}-${quote.symbol}`}>
@@ -459,6 +658,8 @@ function CommodityPanel({ quotes }: { quotes: CommodityQuote[] }) {
           </div>
         );
       })}
+      </div>
+      {!filteredQuotes.length ? <MarketEmpty title="当前分类暂无真实商品行情" compact /> : null}
     </div>
   );
 }
@@ -600,6 +801,34 @@ function sortDragonTigerItems(items: DragonTigerItem[], sortKey: DragonTigerSort
     }
     return right.net_amount - left.net_amount || right.turnover - left.turnover;
   });
+}
+
+function mergeNewsItems(current: MarketNewsItem[], incoming: MarketNewsItem[]): MarketNewsItem[] {
+  const seen = new Set<string>();
+  const output: MarketNewsItem[] = [];
+  for (const item of [...current, ...incoming]) {
+    const key = item.id || `${item.published_at || ""}:${item.title}:${item.url || ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+function commodityMatchesGroup(quote: CommodityQuote, group: CommodityGroupKey): boolean {
+  if (group === "all") {
+    return true;
+  }
+  const text = `${quote.symbol} ${quote.name} ${quote.unit} ${quote.source}`.toLowerCase();
+  if (group === "metals") {
+    return /gold|silver|au|ag|黄金|白银/.test(text);
+  }
+  if (group === "domestic") {
+    return text.includes("cny") || text.includes("sge") || text.includes("上海");
+  }
+  return !commodityMatchesGroup(quote, "domestic");
 }
 
 function dragonTurnoverSortValue(item: DragonTigerItem): number {

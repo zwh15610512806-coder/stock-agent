@@ -783,6 +783,7 @@ def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
     response = client.get("/api/market/dashboard?markets=CN,HK,US&period=daily")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=0, s-maxage=30, stale-while-revalidate=300"
     body = response.json()
     assert body["cache_status"] == "live"
     assert [market["market"] for market in body["markets"]] == ["CN", "HK", "US"]
@@ -806,3 +807,29 @@ def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
     assert {item["name"] for item in body["dragon_tiger"]} == {"蓝黛科技", "新媒股份", "创业股份"}
     assert {item["market_segment"] for item in body["dragon_tiger"]} == {"深主板", "创业板", "科创板"}
     assert body["index_sparklines"]["000001.SH"]
+
+
+def test_market_overview_without_markets_returns_danginvest_style_snapshot(tmp_path) -> None:
+    app = create_app()
+    app.state.market_service = DashboardMarketService(
+        cache_ttl_seconds=90,
+        akshare_module=DashboardAkShare(),
+        snapshot_cache=MarketSnapshotCache(tmp_path / "market_cache.sqlite3"),
+    )
+    client = TestClient(app)
+
+    snapshot_response = client.get("/api/market/overview")
+    legacy_response = client.get("/api/market/overview", params={"markets": "CN,HK,US"})
+
+    assert snapshot_response.status_code == 200
+    snapshot = snapshot_response.json()
+    assert snapshot["tradeDate"] == "2026-06-23"
+    assert snapshot["data"]["totalTurnoverYuan"] == 1230100000000
+    assert snapshot["data"]["upCount"] == 2600
+    assert snapshot["data"]["marketTemperature"] == 57.7
+    assert snapshot["data"]["mainInflowYuan"] == 325535500
+    assert snapshot["meta"]["style"] == "danginvest-market-overview"
+
+    assert legacy_response.status_code == 200
+    legacy = legacy_response.json()
+    assert [market["market"] for market in legacy["markets"]] == ["CN", "HK", "US"]

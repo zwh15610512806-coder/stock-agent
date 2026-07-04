@@ -1,5 +1,9 @@
-from fastapi import APIRouter, Query, Request
+from typing import Any
 
+from fastapi import APIRouter, Query, Request, Response
+
+from app.routers.cache_headers import set_shared_cache_header
+from app.routers.market_payloads import danginvest_overview_snapshot
 from app.schemas.market import CandleSnapshot, MarketCode, MarketDashboardResponse, MarketOverviewResponse, QuoteSnapshot
 from app.services.market import MarketDataService
 from app.services.portfolio import DISCLAIMER
@@ -8,12 +12,16 @@ from app.services.symbols import normalize_symbol
 router = APIRouter(prefix="/api/market", tags=["market"])
 
 
-@router.get("/overview", response_model=MarketOverviewResponse)
+@router.get("/overview")
 async def overview(
     request: Request,
-    markets: str = Query(default="CN,HK,US"),
-) -> MarketOverviewResponse:
+    markets: str | None = Query(default=None),
+    date: str | None = Query(default=None, min_length=10, max_length=10),
+) -> Any:
     service: MarketDataService = request.app.state.market_service
+    if markets is None or date is not None:
+        dashboard_response = await service.dashboard(["CN", "HK", "US"], "daily")
+        return danginvest_overview_snapshot(dashboard_response, date)
     requested = _parse_markets(markets)
     return MarketOverviewResponse(markets=await service.overview(requested), disclaimer=DISCLAIMER)
 
@@ -21,11 +29,13 @@ async def overview(
 @router.get("/dashboard", response_model=MarketDashboardResponse)
 async def dashboard(
     request: Request,
+    response: Response,
     markets: str = Query(default="CN,HK,US"),
     period: str = Query(default="daily", pattern="^(daily|weekly|monthly)$"),
 ) -> MarketDashboardResponse:
     service: MarketDataService = request.app.state.market_service
     requested = _parse_markets(markets)
+    set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
     return await service.dashboard(requested, period)
 
 

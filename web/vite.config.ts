@@ -8,10 +8,16 @@ export default defineConfig({
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ["react", "react-dom", "react-router-dom"],
-          query: ["@tanstack/react-query", "zustand"],
-          charts: ["echarts", "lightweight-charts"],
+        manualChunks(id) {
+          if (id.includes("node_modules/react") || id.includes("node_modules/react-dom") || id.includes("node_modules/react-router-dom")) {
+            return "react";
+          }
+          if (id.includes("node_modules/@tanstack/react-query") || id.includes("node_modules/zustand")) {
+            return "query";
+          }
+          if (id.includes("node_modules/echarts") || id.includes("node_modules/lightweight-charts")) {
+            return "charts";
+          }
         },
       },
     },

@@ -19,14 +19,17 @@ import {
 import { SourceStatusBadge } from "../components/SourceStatusBadge";
 import { api, apiFailureMessage } from "../lib/api";
 import { formatNumber } from "../lib/format";
+import { readPersistedQuery, writePersistedQuery } from "../lib/persisted-query";
 import type {
   DashboardCacheStatus,
   DashboardSourceStatus,
+  MacroDashboardResponse,
   MacroTimeseriesResponse,
   MacroTimeseriesSeries,
   MacroXrayPoint,
   MacroXrayResponse,
   MacroXrayTarget,
+  MacroXrayTargetsResponse,
   SourceMetric,
 } from "../lib/types";
 
@@ -133,6 +136,11 @@ const PRESETS = [
 
 type ChartOption = echarts.EChartsOption;
 
+const MACRO_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MACRO_QUERY_STALE_MS = 60 * 60 * 1000;
+const MACRO_DASHBOARD_SNAPSHOT_KEY = "macro-dashboard";
+const MACRO_TIMESERIES_SNAPSHOT_KEY = `macro-timeseries:${DEFAULT_SERIES_IDS.join(",")}:2006-01-01:2000`;
+
 export function MacroPage() {
   const [targetValue, setTargetValue] = useState("index:000300.SH");
   const [targetType, setTargetType] = useState("index");
@@ -140,18 +148,47 @@ export function MacroPage() {
   const [periodWindow, setPeriodWindow] = useState(16);
   const [sandboxIds, setSandboxIds] = useState(["cn.money.m1_yoy", "cn.money.m1_minus_m2_yoy", "cn.ppi.yoy"]);
   const target = parseTargetValue(targetValue);
+  const macroXrayTargetsSnapshotKey = `macro-xray-targets:${targetType}:6:stock_basic_full_v1`;
+  const macroXraySnapshotKey = `macro-xray:${target.universe_type}:${target.universe_code}:${scope}:latest:40:6`;
 
   const dashboard = useQuery({
     queryKey: ["macro-dashboard"],
     queryFn: () => api.macroDashboard(),
+    initialData: () =>
+      readPersistedQuery<MacroDashboardResponse>(MACRO_DASHBOARD_SNAPSHOT_KEY, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.data,
+    initialDataUpdatedAt: () =>
+      readPersistedQuery<MacroDashboardResponse>(MACRO_DASHBOARD_SNAPSHOT_KEY, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.updatedAt,
+    staleTime: MACRO_QUERY_STALE_MS,
   });
   const timeseries = useQuery({
     queryKey: ["macro-timeseries"],
     queryFn: () => api.macroTimeseries({ series_ids: DEFAULT_SERIES_IDS, start: "2006-01-01", max_points: 2000 }),
+    initialData: () =>
+      readPersistedQuery<MacroTimeseriesResponse>(MACRO_TIMESERIES_SNAPSHOT_KEY, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.data,
+    initialDataUpdatedAt: () =>
+      readPersistedQuery<MacroTimeseriesResponse>(MACRO_TIMESERIES_SNAPSHOT_KEY, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.updatedAt,
+    staleTime: MACRO_QUERY_STALE_MS,
   });
   const targets = useQuery({
     queryKey: ["macro-xray-targets", targetType],
     queryFn: () => api.macroXrayTargets({ universe_type: targetType, lookback: 6, target_source: "stock_basic_full_v1" }),
+    initialData: () =>
+      readPersistedQuery<MacroXrayTargetsResponse>(macroXrayTargetsSnapshotKey, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.data,
+    initialDataUpdatedAt: () =>
+      readPersistedQuery<MacroXrayTargetsResponse>(macroXrayTargetsSnapshotKey, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.updatedAt,
+    staleTime: MACRO_QUERY_STALE_MS,
   });
   const xray = useQuery({
     queryKey: ["macro-xray", target.universe_type, target.universe_code, scope],
@@ -164,7 +201,36 @@ export function MacroPage() {
         quarters: 40,
         lookback: 6,
       }),
+    initialData: () =>
+      readPersistedQuery<MacroXrayResponse>(macroXraySnapshotKey, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.data,
+    initialDataUpdatedAt: () =>
+      readPersistedQuery<MacroXrayResponse>(macroXraySnapshotKey, {
+        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
+      })?.updatedAt,
+    staleTime: MACRO_QUERY_STALE_MS,
   });
+  useEffect(() => {
+    if (dashboard.data) {
+      writePersistedQuery(MACRO_DASHBOARD_SNAPSHOT_KEY, dashboard.data, dashboard.dataUpdatedAt || Date.now());
+    }
+  }, [dashboard.data, dashboard.dataUpdatedAt]);
+  useEffect(() => {
+    if (timeseries.data) {
+      writePersistedQuery(MACRO_TIMESERIES_SNAPSHOT_KEY, timeseries.data, timeseries.dataUpdatedAt || Date.now());
+    }
+  }, [timeseries.data, timeseries.dataUpdatedAt]);
+  useEffect(() => {
+    if (targets.data) {
+      writePersistedQuery(macroXrayTargetsSnapshotKey, targets.data, targets.dataUpdatedAt || Date.now());
+    }
+  }, [macroXrayTargetsSnapshotKey, targets.data, targets.dataUpdatedAt]);
+  useEffect(() => {
+    if (xray.data) {
+      writePersistedQuery(macroXraySnapshotKey, xray.data, xray.dataUpdatedAt || Date.now());
+    }
+  }, [macroXraySnapshotKey, xray.data, xray.dataUpdatedAt]);
 
   const dashboardData = dashboard.data;
   const timeseriesData = timeseries.data;

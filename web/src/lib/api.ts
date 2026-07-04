@@ -11,8 +11,13 @@ import type {
   MacroXrayResponse,
   MacroXrayTargetsResponse,
   MarketDashboardResponse,
+  MarketDashboardRealtimeResponse,
+  MarketDateSnapshotResponse,
   MarketCode,
+  MarketIntradayResponse,
+  MarketNewsResponse,
   MarketOverviewResponse,
+  MarketStatusResponse,
   PortfolioAnalysis,
   PortfolioPosition,
   QuoteSnapshot,
@@ -21,6 +26,7 @@ import type {
   StockInsightResponse,
   StockScreenerResponse,
   SymbolSearchResult,
+  TopTurnoverResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -102,6 +108,23 @@ export const api = {
     requestJson<MarketOverviewResponse>(`/api/market/overview?markets=${markets.join(",")}`),
   marketDashboard: (markets: MarketCode[] = ["CN", "HK", "US"], period = "daily") =>
     requestJson<MarketDashboardResponse>(`/api/market/dashboard?markets=${markets.join(",")}&period=${period}`),
+  marketStatus: () => requestJson<MarketStatusResponse>("/api/market/status"),
+  marketDashboardRealtime: () => requestJson<MarketDashboardRealtimeResponse>("/api/market/dashboard/realtime"),
+  marketIntraday: (groups: string[] = ["indices-cn"]) =>
+    requestJson<MarketIntradayResponse>(`/api/market/dashboard/intraday?groups=${encodeURIComponent(groups.join(","))}`),
+  marketNews: (limit = 120, offset = 0) =>
+    requestJson<MarketNewsResponse>(`/api/market/news?limit=${limit}&offset=${offset}`),
+  marketTopTurnover: (market = "cn", limit = 10, date?: string) => {
+    const query = new URLSearchParams();
+    query.set("market", market);
+    query.set("limit", String(limit));
+    if (date) {
+      query.set("date", date);
+    }
+    return requestJson<TopTurnoverResponse>(`/api/market/stocks/top-turnover?${query.toString()}`);
+  },
+  marketDateSnapshot: (date?: string) =>
+    requestJson<MarketDateSnapshotResponse>(`/api/market${date ? `?date=${encodeURIComponent(date)}` : ""}`),
   macroDashboard: () => requestJson<MacroDashboardResponse>("/api/macro/dashboard"),
   macroTimeseries: (params: { series_ids: string[]; start?: string; end?: string; max_points?: number }) => {
     const query = new URLSearchParams();

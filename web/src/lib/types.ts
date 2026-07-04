@@ -114,6 +114,7 @@ export interface MarketNewsItem {
   published_at: string | null;
   source: string;
   url: string;
+  id?: string;
 }
 
 export interface CommodityQuote {
@@ -169,6 +170,117 @@ export interface MarketDashboardResponse {
   dragon_tiger: DragonTigerItem[];
   index_sparklines: Record<string, number[]>;
   disclaimer: string;
+}
+
+export interface MarketStatusItem {
+  market: string;
+  name: string;
+  is_trading: boolean;
+  status: string;
+  status_text: string;
+  calendar_ok: boolean;
+  calendar_market: string;
+  is_trade_day: boolean;
+  trade_date: string;
+  prev_trade_date: string;
+}
+
+export interface MarketStatusResponse {
+  ts: string;
+  timestamp: number;
+  weekday: number;
+  weekday_name: string;
+  data: MarketStatusItem[];
+}
+
+export interface MarketNewsResponse {
+  ts: string;
+  count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  data: MarketNewsItem[];
+  next_after?: string | null;
+  source_status?: DashboardSourceStatus[];
+}
+
+export interface TopTurnoverItem {
+  code: string;
+  symbol: string;
+  name: string;
+  price: number | null;
+  changePct: number | null;
+  change_pct?: number | null;
+  turnoverYuan: number | null;
+  turnover?: number | null;
+  source: string;
+}
+
+export interface TopTurnoverResponse {
+  mode: string;
+  limit: number;
+  stale: boolean;
+  tradeDate: string;
+  data: {
+    count: number;
+    items: TopTurnoverItem[];
+  };
+  asOf: string;
+  source_status?: DashboardSourceStatus[];
+}
+
+export interface MarketIntradayResponse {
+  ts: string;
+  status: DashboardSourceState;
+  stale: boolean;
+  source: string;
+  detail: string;
+  groups: Record<
+    string,
+    {
+      id: string;
+      title: string;
+      date: string;
+      intervalSec: number;
+      updatedAt: string;
+      items: Array<{
+        symbol: string;
+        name: string;
+        source: string;
+        points: Array<{ time: string; price: number; change_pct: number; volume: number | null }>;
+      }>;
+    }
+  >;
+}
+
+export interface MarketDashboardRealtimeResponse {
+  ts: string;
+  stale: boolean;
+  cache_status: DashboardCacheStatus;
+  source_status: DashboardSourceStatus[];
+  overview: Record<string, unknown>;
+  groups: Array<{
+    id: string;
+    title: string;
+    status: DashboardSourceState;
+    items: Array<Record<string, unknown>>;
+  }>;
+  data: MarketDashboardResponse;
+}
+
+export interface MarketDateSnapshotResponse {
+  ts: string;
+  tradeDate: string;
+  stale: boolean;
+  status: MarketStatusResponse;
+  overview: Record<string, unknown>;
+  realtime: MarketDashboardRealtimeResponse;
+  news: MarketNewsResponse;
+  topTurnover: TopTurnoverResponse;
+  heatmap: Record<string, DashboardHeatItem[]>;
+  commodities: CommodityQuote[];
+  dragonTiger: DragonTigerItem[];
+  source_status: DashboardSourceStatus[];
 }
 
 export interface SymbolSearchResult {

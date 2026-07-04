@@ -1538,6 +1538,43 @@ body {
   font-size: 13px;
 }
 
+.market-status-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.market-status-chips span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 25px;
+  padding: 0 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.market-status-chips span.trading {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #047857;
+}
+
+.market-status-chips strong {
+  color: var(--board-ink);
+}
+
+.market-status-chips small {
+  color: #94a3b8;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .market-hero-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1849,6 +1886,40 @@ body {
   font-size: 12px;
 }
 
+.top-turnover-strip {
+  display: grid;
+  grid-template-columns: 120px repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.top-turnover-strip > div,
+.top-turnover-strip article {
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border: 1px solid var(--board-line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.top-turnover-strip strong,
+.top-turnover-strip span,
+.top-turnover-strip small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-turnover-strip span,
+.top-turnover-strip small {
+  color: var(--board-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
 .news-block {
   background: #f8fbff;
 }
@@ -1913,6 +1984,11 @@ body {
   white-space: nowrap;
 }
 
+.news-axis-slider {
+  width: 100%;
+  accent-color: #111827;
+}
+
 .news-timeline {
   display: grid;
   gap: 8px;
@@ -1966,6 +2042,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.news-load-more {
+  justify-self: center;
+  min-height: 32px;
+  padding: 0 16px;
 }
 
 .heatmap-board {
@@ -2085,10 +2167,47 @@ body {
   gap: 14px;
 }
 
+.commodity-panel,
 .commodity-list,
 .dragon-list {
   display: grid;
   gap: 8px;
+}
+
+.commodity-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.commodity-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.commodity-tabs button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #dbe5ef;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--board-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.commodity-tabs button.active {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+}
+
+.commodity-period-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .dragon-panel {
