@@ -39,7 +39,7 @@ export function AiPage() {
     report?.metadata?.skill_label || (report?.metadata?.analysis_skill === "serenity" ? "serenity-skill" : "标准分析");
 
   return (
-    <div className="page-stack">
+    <div className="page-stack ai-research-page">
       <section className="section-head">
         <div>
           <div className="eyebrow">DEEPSEEK REPORT</div>

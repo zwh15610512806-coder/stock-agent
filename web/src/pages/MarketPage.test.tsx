@@ -223,6 +223,21 @@ const dashboard: MarketDashboardResponse = {
       reason: "日振幅值达15%",
       source: "eastmoney-lhb",
     },
+    ...Array.from({ length: 8 }, (_, index) => ({
+      symbol: `60090${index}`,
+      name: `扩展股份${index + 1}`,
+      sector: index % 2 === 0 ? "电子" : "医药生物",
+      market_segment: index % 3 === 0 ? "沪主板" : index % 3 === 1 ? "创业板" : "科创板",
+      trade_date: "2026-06-23",
+      close: 12 + index,
+      change_pct: 1 + index / 10,
+      net_amount: 1000000 - index,
+      buy_amount: 2000000 + index,
+      sell_amount: 1000000 + index,
+      turnover: 500000000 + index * 1000000,
+      reason: "扩展排名样例",
+      source: "eastmoney-lhb",
+    })),
   ],
   index_sparklines: {
     "000001.SH": [3001, 3008, 3011],
@@ -516,6 +531,33 @@ describe("MarketPage dashboard", () => {
     expect(screen.getAllByText("成交额").length).toBeGreaterThan(1);
     expect(screen.getByText("88.90 亿")).toBeTruthy();
     expect(within(screen.getAllByTestId("dragon-row")[0]).getByText("沪主板")).toBeTruthy();
+  });
+
+  it("filters the dragon tiger list by market and sector and expands more rows", async () => {
+    vi.mocked(api.marketDashboard).mockResolvedValue(dashboard);
+
+    renderMarketPage();
+
+    expect(await screen.findByText("蓝黛科技")).toBeTruthy();
+    expect(screen.getAllByTestId("dragon-row")).toHaveLength(10);
+    expect(screen.getByText("已显示 10 / 12")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开更多" }));
+    expect(screen.getAllByTestId("dragon-row")).toHaveLength(12);
+    expect(screen.getByText("已显示 12 / 12")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "展开更多" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("龙虎榜市场筛选"), { target: { value: "创业板" } });
+    expect(screen.getAllByTestId("dragon-row")).toHaveLength(4);
+    expect(screen.getByText("已显示 4 / 4")).toBeTruthy();
+    expect(screen.queryByText("蓝黛科技")).toBeNull();
+    expect(screen.getAllByTestId("dragon-row").every((row) => row.textContent?.includes("创业板"))).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("龙虎榜市场筛选"), { target: { value: "all" } });
+    fireEvent.change(screen.getByLabelText("龙虎榜板块筛选"), { target: { value: "电子" } });
+    expect(screen.getAllByTestId("dragon-row")).toHaveLength(4);
+    expect(screen.getByText("已显示 4 / 4")).toBeTruthy();
+    expect(screen.getAllByTestId("dragon-row").every((row) => row.textContent?.includes("电子"))).toBe(true);
   });
 });
 

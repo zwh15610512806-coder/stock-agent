@@ -66,6 +66,8 @@ const DRAGON_TIGER_SORT_OPTIONS: Array<{ value: DragonTigerSortKey; label: strin
   { value: "fall_pct", label: "下跌%" },
   { value: "turnover", label: "成交额" },
 ];
+const DRAGON_TIGER_VISIBLE_STEP = 10;
+const ALL_DRAGON_FILTER = "all";
 
 const MARKET_DASHBOARD_SNAPSHOT_KEY = "market-dashboard:reference-overview";
 const MARKET_DASHBOARD_SNAPSHOT_MAX_AGE_MS = 15 * 60 * 1000;
@@ -666,63 +668,124 @@ function CommodityPanel({ quotes }: { quotes: CommodityQuote[] }) {
 
 function DragonTigerList({ items }: { items: DragonTigerItem[] }) {
   const [sortKey, setSortKey] = useState<DragonTigerSortKey>("net_inflow");
-  const rows = useMemo(() => sortDragonTigerItems(items, sortKey).slice(0, 10), [items, sortKey]);
+  const [marketFilter, setMarketFilter] = useState(ALL_DRAGON_FILTER);
+  const [sectorFilter, setSectorFilter] = useState(ALL_DRAGON_FILTER);
+  const [visibleLimit, setVisibleLimit] = useState(DRAGON_TIGER_VISIBLE_STEP);
+  const sortedRows = useMemo(() => sortDragonTigerItems(items, sortKey), [items, sortKey]);
+  const filteredRows = useMemo(
+    () => sortedRows.filter((item) => dragonFilterMatches(item, marketFilter, sectorFilter)),
+    [marketFilter, sectorFilter, sortedRows],
+  );
+  const rows = useMemo(() => filteredRows.slice(0, visibleLimit), [filteredRows, visibleLimit]);
+  const marketOptions = useMemo(() => uniqueDragonOptions(items.map((item) => item.market_segment)), [items]);
+  const sectorOptions = useMemo(() => uniqueDragonOptions(items.map((item) => item.sector)), [items]);
+
+  const resetVisibleLimit = () => setVisibleLimit(DRAGON_TIGER_VISIBLE_STEP);
 
   if (!items.length) {
     return <MarketEmpty title="暂无真实龙虎榜" />;
   }
   return (
     <div className="dragon-panel">
-      <div className="dragon-tabs" aria-label="龙虎榜排序">
-        {DRAGON_TIGER_SORT_OPTIONS.map((option) => (
-          <button
-            aria-pressed={sortKey === option.value}
-            className={sortKey === option.value ? "active" : ""}
-            key={option.value}
-            onClick={() => setSortKey(option.value)}
-            type="button"
-          >
-            {option.label}
-          </button>
-        ))}
+      <div className="dragon-toolbar">
+        <div className="dragon-tabs" aria-label="龙虎榜排序">
+          {DRAGON_TIGER_SORT_OPTIONS.map((option) => (
+            <button
+              aria-pressed={sortKey === option.value}
+              className={sortKey === option.value ? "active" : ""}
+              key={option.value}
+              onClick={() => {
+                setSortKey(option.value);
+                resetVisibleLimit();
+              }}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="dragon-filters">
+          <label className="dragon-filter">
+            <span>市场</span>
+            <select
+              aria-label="龙虎榜市场筛选"
+              onChange={(event) => {
+                setMarketFilter(event.target.value);
+                resetVisibleLimit();
+              }}
+              value={marketFilter}
+            >
+              <option value={ALL_DRAGON_FILTER}>全部市场</option>
+              {marketOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label className="dragon-filter">
+            <span>板块</span>
+            <select
+              aria-label="龙虎榜板块筛选"
+              onChange={(event) => {
+                setSectorFilter(event.target.value);
+                resetVisibleLimit();
+              }}
+              value={sectorFilter}
+            >
+              <option value={ALL_DRAGON_FILTER}>全部板块</option>
+              {sectorOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
       {rows.length ? (
-        <div className="dragon-list">
-          {rows.map((item, index) => {
-            const changeTone = toneForPct(item.change_pct);
-            const netTone = item.net_amount >= 0 ? "tone-red" : "tone-green";
-            return (
-              <div className="dragon-row" data-testid="dragon-row" key={`${item.trade_date}-${item.symbol}-${index}`}>
-                <span className="rank-number">{index + 1}</span>
-                <div className="dragon-main">
-                  <div className="dragon-title-row">
-                    <strong>{item.name}</strong>
-                    <span className="dragon-tag">{item.market_segment || "--"}</span>
-                    <span className="dragon-tag">{item.sector || "--"}</span>
+        <>
+          <div className="dragon-list">
+            {rows.map((item, index) => {
+              const changeTone = toneForPct(item.change_pct);
+              const netTone = item.net_amount >= 0 ? "tone-red" : "tone-green";
+              return (
+                <div className="dragon-row" data-testid="dragon-row" key={`${item.trade_date}-${item.symbol}-${index}`}>
+                  <span className="rank-number">{index + 1}</span>
+                  <div className="dragon-main">
+                    <div className="dragon-title-row">
+                      <strong>{item.name}</strong>
+                      <span className="dragon-tag">{item.market_segment || "--"}</span>
+                      <span className="dragon-tag">{item.sector || "--"}</span>
+                    </div>
+                    <span>{item.symbol} · {item.reason || item.trade_date}</span>
                   </div>
-                  <span>{item.symbol} · {item.reason || item.trade_date}</span>
+                  <div className="dragon-metrics">
+                    <div className={`dragon-metric ${sortKey === "rise_pct" || sortKey === "fall_pct" ? "active" : ""}`}>
+                      <span>收盘/涨跌</span>
+                      <strong>{formatNumber(item.close, 2)}</strong>
+                      <small className={`tone-text ${changeTone}`}>{formatSignedPct(item.change_pct)}</small>
+                    </div>
+                    <div className={`dragon-metric ${sortKey === "net_inflow" || sortKey === "net_outflow" ? "active" : ""}`}>
+                      <span>净买额</span>
+                      <strong className={netTone}>{formatMoney(item.net_amount)}</strong>
+                    </div>
+                    <div className={`dragon-metric ${sortKey === "turnover" ? "active" : ""}`}>
+                      <span>成交额</span>
+                      <strong>{formatDragonTurnover(item.turnover)}</strong>
+                    </div>
+                  </div>
                 </div>
-                <div className="dragon-metrics">
-                  <div className={`dragon-metric ${sortKey === "rise_pct" || sortKey === "fall_pct" ? "active" : ""}`}>
-                    <span>收盘/涨跌</span>
-                    <strong>{formatNumber(item.close, 2)}</strong>
-                    <small className={`tone-text ${changeTone}`}>{formatSignedPct(item.change_pct)}</small>
-                  </div>
-                  <div className={`dragon-metric ${sortKey === "net_inflow" || sortKey === "net_outflow" ? "active" : ""}`}>
-                    <span>净买额</span>
-                    <strong className={netTone}>{formatMoney(item.net_amount)}</strong>
-                  </div>
-                  <div className={`dragon-metric ${sortKey === "turnover" ? "active" : ""}`}>
-                    <span>成交额</span>
-                    <strong>{formatDragonTurnover(item.turnover)}</strong>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+          <div className="dragon-list-footer">
+            <span>已显示 {rows.length} / {filteredRows.length}</span>
+            {rows.length < filteredRows.length ? (
+              <button onClick={() => setVisibleLimit((limit) => limit + DRAGON_TIGER_VISIBLE_STEP)} type="button">
+                展开更多
+              </button>
+            ) : null}
+          </div>
+        </>
       ) : (
-        <MarketEmpty title="当前排序暂无真实龙虎榜" compact />
+        <MarketEmpty title="当前筛选暂无真实龙虎榜" compact />
       )}
     </div>
   );
@@ -773,6 +836,20 @@ function heatmapSortValue(item: DashboardHeatItem, metric: HeatmapAreaMetric): n
     return Math.abs(item.change_pct || 0);
   }
   return item.turnover || 0;
+}
+
+function dragonFilterMatches(item: DragonTigerItem, marketFilter: string, sectorFilter: string): boolean {
+  if (marketFilter !== ALL_DRAGON_FILTER && item.market_segment !== marketFilter) {
+    return false;
+  }
+  if (sectorFilter !== ALL_DRAGON_FILTER && item.sector !== sectorFilter) {
+    return false;
+  }
+  return true;
+}
+
+function uniqueDragonOptions(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
 }
 
 function sortDragonTigerItems(items: DragonTigerItem[], sortKey: DragonTigerSortKey): DragonTigerItem[] {

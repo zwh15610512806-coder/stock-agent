@@ -19,7 +19,7 @@ export function SearchPage() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack search-page">
       <section className="section-head">
         <div>
           <div className="eyebrow">SYMBOL SEARCH</div>

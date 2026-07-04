@@ -149,7 +149,6 @@ class DashboardAkShare:
                     "上榜日": "2026-06-23",
                     "收盘价": 26.1,
                     "涨跌幅": 30.0,
-                    "成交额": "28.33亿",
                     "龙虎榜净买额": 120000000,
                     "龙虎榜买入额": 200000000,
                     "龙虎榜卖出额": 80000000,
@@ -186,7 +185,7 @@ class DashboardAkShare:
         return FakeTable(
             [
                 {"代码": "002765", "名称": "蓝黛科技", "所属行业": "汽车零部件"},
-                {"代码": "688770", "名称": "新媒股份", "所属行业": "传媒"},
+                {"代码": "688770", "名称": "新媒股份", "所属行业": "传媒", "成交额": "28.33亿"},
                 {"代码": "300770", "名称": "创业股份", "所属行业": "电力设备"},
             ]
         )
@@ -594,6 +593,7 @@ async def test_dashboard_uses_real_sources_and_reports_cache_status(tmp_path) ->
     assert dashboard.dragon_tiger[0].name == "蓝黛科技"
     assert len(dashboard.dragon_tiger) == 3
     assert dashboard.dragon_tiger[0].turnover == 4112000000
+    assert dashboard.dragon_tiger[1].turnover == 2833000000
     assert dashboard.dragon_tiger[0].sector == "汽车零部件"
     assert dashboard.dragon_tiger[1].sector == "传媒"
     assert dashboard.dragon_tiger[0].market_segment == "深主板"
@@ -801,6 +801,7 @@ def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:
     assert body["commodity_quotes"][0]["name"] == "黄金连续"
     assert body["dragon_tiger"][0]["name"] == "蓝黛科技"
     assert body["dragon_tiger"][0]["turnover"] == 4112000000
+    assert body["dragon_tiger"][1]["turnover"] == 2833000000
     assert body["dragon_tiger"][0]["sector"] == "汽车零部件"
     assert body["dragon_tiger"][0]["market_segment"] == "深主板"
     assert "mini_candles" not in body["dragon_tiger"][0]

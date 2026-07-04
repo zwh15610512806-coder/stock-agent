@@ -60,6 +60,7 @@ COMMODITY_SOURCE = "akshare-commodity"
 LHB_SOURCE = "eastmoney-lhb"
 ASHARE_TURNOVER_SOURCE = "akshare-exchange-summary"
 DRAGON_TIGER_SECTOR_FIELDS = ("所属行业", "行业", "板块", "行业板块", "sector", "industry")
+DRAGON_TIGER_TURNOVER_FIELDS = ("成交额", "成交金额", "成交金额(元)", "成交金额（元）", "turnover", "amount")
 SNAPSHOT_TTL_SECONDS = 10 * 60
 SLOW_SNAPSHOT_TTL_SECONDS = 30 * 60
 DASHBOARD_SOURCE_TIMEOUT_SECONDS = 8.0
@@ -796,24 +797,27 @@ class MarketDataService:
         latest_date = max(item.trade_date for item in items)
         latest_items = [item for item in items if item.trade_date == latest_date]
         latest_items = sorted(latest_items, key=lambda item: item.net_amount, reverse=True)
-        sector_by_code = self._dragon_tiger_sector_map_sync(latest_items)
+        spot_meta_by_code = self._dragon_tiger_spot_meta_map_sync(latest_items)
         enriched_items: list[DragonTigerItem] = []
         for item in latest_items:
             code = _dragon_tiger_code_key(item.symbol)
-            sector = item.sector or sector_by_code.get(code, "")
+            spot_sector, spot_turnover = spot_meta_by_code.get(code, ("", 0.0))
+            sector = item.sector or spot_sector
+            turnover = item.turnover if item.turnover > 0 else spot_turnover
             enriched_items.append(
                 item.model_copy(
                     update={
                         "sector": sector,
+                        "turnover": turnover,
                     }
                 )
             )
         return enriched_items
 
-    def _dragon_tiger_sector_map_sync(self, items: list[DragonTigerItem]) -> dict[str, str]:
-        missing_codes = {_dragon_tiger_code_key(item.symbol) for item in items if not item.sector}
-        missing_codes.discard("")
-        if not missing_codes:
+    def _dragon_tiger_spot_meta_map_sync(self, items: list[DragonTigerItem]) -> dict[str, tuple[str, float]]:
+        wanted_codes = {_dragon_tiger_code_key(item.symbol) for item in items if not item.sector or item.turnover <= 0}
+        wanted_codes.discard("")
+        if not wanted_codes:
             return {}
         try:
             with _without_proxy_env():
@@ -821,15 +825,16 @@ class MarketDataService:
         except Exception:
             return {}
 
-        sectors: dict[str, str] = {}
+        meta_by_code: dict[str, tuple[str, float]] = {}
         for row in rows:
             code = _dragon_tiger_code_key(_row_value(row, ("代码", "股票代码", "code", "symbol")))
-            if code not in missing_codes or code in sectors:
+            if code not in wanted_codes or code in meta_by_code:
                 continue
             sector = _dragon_tiger_sector_from_row(row)
-            if sector:
-                sectors[code] = sector
-        return sectors
+            turnover = _dragon_tiger_turnover_from_row(row)
+            if sector or turnover > 0:
+                meta_by_code[code] = (sector, turnover)
+        return meta_by_code
 
     async def _dashboard_index_sparklines(
         self,
@@ -1501,6 +1506,10 @@ def _dragon_tiger_sector_from_row(row: Mapping[str, object]) -> str:
     return _clean_text(_row_value(row, DRAGON_TIGER_SECTOR_FIELDS))
 
 
+def _dragon_tiger_turnover_from_row(row: Mapping[str, object]) -> float:
+    return parse_cn_money(_row_value(row, DRAGON_TIGER_TURNOVER_FIELDS))
+
+
 def _dragon_tiger_market_segment(symbol: str) -> str:
     normalized = normalize_symbol(symbol, "CN")
     code = _plain_code(normalized)
@@ -1531,7 +1540,7 @@ def _dragon_tiger_item_from_row(row: Mapping[str, object]) -> DragonTigerItem | 
         trade_date=trade_date,
         close=_safe_float(_row_value(row, ("收盘价", "close"))),
         change_pct=parse_pct(_row_value(row, ("涨跌幅", "change_pct"))),
-        turnover=parse_cn_money(_row_value(row, ("成交额", "成交金额", "成交金额(元)", "成交金额（元）", "turnover", "amount"))),
+        turnover=_dragon_tiger_turnover_from_row(row),
         sector=_dragon_tiger_sector_from_row(row),
         market_segment=_dragon_tiger_market_segment(symbol),
         net_amount=parse_cn_money(_row_value(row, ("龙虎榜净买额", "机构买入净额", "净额", "net_amount"))),
