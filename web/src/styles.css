@@ -5382,7 +5382,7 @@ body {
 .dashboard-metric-value,
 .index-price {
   color: #151517;
-  font-size: clamp(30px, 3vw, 42px);
+  font-size: 34px;
   font-weight: 900;
 }
 
@@ -5498,6 +5498,12 @@ select:focus {
 
 .index-price-row {
   margin-top: 10px;
+}
+
+.index-price {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .sparkline-empty,
