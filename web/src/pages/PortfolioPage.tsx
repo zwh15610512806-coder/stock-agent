@@ -121,7 +121,7 @@ export function PortfolioPage() {
 
       <div className="metric-grid portfolio-metrics">
         {ocrPortfolioSummary ? (
-          <BrokerOcrMetrics summary={ocrPortfolioSummary} unmatchedCount={ocrUnmatchedRows.length} />
+          <BrokerOcrMetrics summary={ocrPortfolioSummary} unmatchedCount={ocrUnmatchedRows.length} positionsCount={positions.length} topWeight={topWeight} />
         ) : screenshotSummary ? (
           <>
             <MetricCard label="识别股票" value={screenshotSummary.count} detail="截图AI识别" />
@@ -336,23 +336,33 @@ export function PortfolioPage() {
   );
 }
 
-function BrokerOcrMetrics({ summary, unmatchedCount }: { summary: OcrPortfolioSummary; unmatchedCount: number }) {
+function BrokerOcrMetrics({
+  summary,
+  unmatchedCount,
+  positionsCount,
+  topWeight,
+}: {
+  summary: OcrPortfolioSummary;
+  unmatchedCount: number;
+  positionsCount: number;
+  topWeight?: { name: string; weight: number };
+}) {
+  const positionRatioText = formatOptionalPct(summary.position_ratio);
   return (
     <>
-      <MetricCard label="最新合计" value={formatOptionalNumber(summary.total_assets)} detail={summary.currency || "券商 OCR 汇总"} />
+      <MetricCard label="总资产" value={formatOptionalNumber(summary.total_assets)} detail={summary.currency || "截图账户摘要"} />
       <MetricCard
         label="总盈亏"
         value={formatOptionalNumber(summary.total_pnl)}
-        detail={`仓位 ${formatOptionalPct(summary.position_ratio)}`}
+        detail={`${formatOptionalNumber(summary.day_pnl)} / ${formatOptionalPct(summary.day_pnl_pct)}`}
         tone={toneForOptional(summary.total_pnl)}
       />
+      <MetricCard label="持仓数" value={positionsCount} detail={unmatchedCount ? `待确认 ${unmatchedCount} 行` : "已全部导入"} />
       <MetricCard
-        label="当日盈亏"
-        value={`${formatOptionalNumber(summary.day_pnl)} / ${formatOptionalPct(summary.day_pnl_pct)}`}
-        detail="券商截图口径"
-        tone={toneForOptional(summary.day_pnl)}
+        label="最大权重"
+        value={topWeight ? `${formatNumber(topWeight.weight * 100)}%` : positionRatioText}
+        detail={topWeight?.name || `截图仓位 ${positionRatioText}`}
       />
-      <MetricCard label="持仓市值" value={formatOptionalNumber(summary.market_value)} detail={`待确认 ${unmatchedCount} 行`} />
     </>
   );
 }

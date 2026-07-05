@@ -141,6 +141,10 @@ class OcrTextParseResult:
 
 
 def parse_ocr_text_result(lines: list[str], akshare_module: object | None = None) -> OcrTextParseResult:
+    payload_result = _ocr_result_from_payload(_loads_json_payload("\n".join(lines)), akshare_module=akshare_module)
+    if payload_result.positions or payload_result.unmatched_rows or payload_result.portfolio_summary:
+        return payload_result
+
     broker_result = _broker_holding_result_from_lines(lines, akshare_module=akshare_module)
     if broker_result.positions or broker_result.unmatched_rows or broker_result.portfolio_summary:
         return broker_result
@@ -166,6 +170,60 @@ def _generic_positions_from_lines(lines: list[str]) -> list[PortfolioPosition]:
         seen.add(position.symbol)
         positions.append(position)
     return positions
+
+
+def _ocr_result_from_payload(data: Any | None, akshare_module: object | None = None) -> OcrTextParseResult:
+    if data is None:
+        return OcrTextParseResult()
+    positions = _positions_from_items(_extract_position_items(data), akshare_module=akshare_module)
+    summary = _portfolio_summary_from_payload(data)
+    unmatched_rows = _unmatched_rows_from_payload(data)
+    return OcrTextParseResult(positions=positions, portfolio_summary=summary, unmatched_rows=unmatched_rows)
+
+
+def _portfolio_summary_from_payload(data: Any) -> dict[str, Any] | None:
+    if not isinstance(data, dict):
+        return None
+    raw_summary = data.get("portfolio_summary") or data.get("summary")
+    if not isinstance(raw_summary, dict):
+        return None
+    summary = {
+        "total_assets": _safe_float(raw_summary.get("total_assets")),
+        "total_pnl": _safe_float(raw_summary.get("total_pnl")),
+        "day_pnl": _safe_float(raw_summary.get("day_pnl")),
+        "day_pnl_pct": _safe_ratio(raw_summary.get("day_pnl_pct")),
+        "market_value": _safe_float(raw_summary.get("market_value")),
+        "available_cash": _safe_float(raw_summary.get("available_cash")),
+        "withdrawable_cash": _safe_float(raw_summary.get("withdrawable_cash")),
+        "position_ratio": _safe_ratio(raw_summary.get("position_ratio")),
+        "currency": str(raw_summary.get("currency") or "CNY"),
+    }
+    compact = {key: value for key, value in summary.items() if value is not None or key == "currency"}
+    return compact if len(compact) > 1 else None
+
+
+def _unmatched_rows_from_payload(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    raw_rows = data.get("unmatched_rows") or data.get("unmatched")
+    if not isinstance(raw_rows, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in raw_rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("名称") or "").strip()
+        if not name:
+            continue
+        raw_fields = item.get("raw_fields") if isinstance(item.get("raw_fields"), dict) else {}
+        rows.append(
+            {
+                "name": name,
+                "reason": str(item.get("reason") or "股票名称无法唯一确认").strip(),
+                "raw_fields": raw_fields,
+            }
+        )
+    return rows
 
 
 def _broker_holding_result_from_lines(lines: list[str], akshare_module: object | None = None) -> OcrTextParseResult:
@@ -383,26 +441,26 @@ def _position_raw_fields(position: Any) -> dict[str, str]:
     return {}
 
 
-def parse_ai_position_payload(content: str) -> list[PortfolioPosition]:
+def parse_ai_position_payload(content: str, akshare_module: object | None = None) -> list[PortfolioPosition]:
     data = _loads_json_payload(content)
     if data is not None:
         raw_positions = _extract_position_items(data)
-        positions = _positions_from_items(raw_positions)
+        positions = _positions_from_items(raw_positions, akshare_module=akshare_module)
         if positions:
             return positions
 
         payload_text = "\n".join(_text_values_from_payload(data))
-        positions = _positions_from_markdown_tables(payload_text)
+        positions = _positions_from_markdown_tables(payload_text, akshare_module=akshare_module)
         if positions:
             return positions
-        positions = parse_position_text_lines(_content_text_lines(payload_text))
+        positions = parse_position_text_lines(_content_text_lines(payload_text), akshare_module=akshare_module)
         if positions:
             return positions
 
-    positions = _positions_from_markdown_tables(content)
+    positions = _positions_from_markdown_tables(content, akshare_module=akshare_module)
     if positions:
         return positions
-    return parse_position_text_lines(_content_text_lines(content))
+    return parse_position_text_lines(_content_text_lines(content), akshare_module=akshare_module)
 
 
 def _loads_json_payload(content: str) -> Any | None:
@@ -446,23 +504,27 @@ def _extract_position_items(data: Any) -> list[Any] | None:
     return None
 
 
-def _positions_from_items(raw_positions: list[Any] | None) -> list[PortfolioPosition]:
+def _positions_from_items(raw_positions: list[Any] | None, akshare_module: object | None = None) -> list[PortfolioPosition]:
     if not isinstance(raw_positions, list):
         return []
     positions: list[PortfolioPosition] = []
     for item in raw_positions:
         if not isinstance(item, dict):
             continue
-        position = _position_from_ai_item(item)
+        position = _position_from_ai_item(item, akshare_module=akshare_module)
         if position is not None:
             positions.append(position)
     return positions
 
 
-def _position_from_ai_item(item: dict[str, Any]) -> PortfolioPosition | None:
+def _position_from_ai_item(item: dict[str, Any], akshare_module: object | None = None) -> PortfolioPosition | None:
     raw_symbol = str(_first_present(item, SYMBOL_KEYS) or "").strip().upper()
     if not raw_symbol:
-        return None
+        name_for_lookup = str(_first_present(item, NAME_KEYS) or "").strip()
+        resolved = _resolve_exact_a_share_name(name_for_lookup, akshare_module) if name_for_lookup else None
+        if resolved in (None, "ambiguous"):
+            return None
+        raw_symbol = resolved
     market_hint = _normalize_market_hint(_first_present(item, MARKET_KEYS))
     if market_hint is None and raw_symbol.isdigit():
         market_hint = "HK" if len(raw_symbol) <= 5 else "CN"
@@ -755,7 +817,7 @@ def _ratio_from_number(value: float) -> float:
     return round(value, 6)
 
 
-def _positions_from_markdown_tables(content: str) -> list[PortfolioPosition]:
+def _positions_from_markdown_tables(content: str, akshare_module: object | None = None) -> list[PortfolioPosition]:
     positions: list[PortfolioPosition] = []
     headers: list[str] | None = None
     for raw_line in content.splitlines():
@@ -771,7 +833,7 @@ def _positions_from_markdown_tables(content: str) -> list[PortfolioPosition]:
                 headers = cells
             continue
         row = {headers[index]: cells[index] for index in range(min(len(headers), len(cells)))}
-        position = _position_from_ai_item(row)
+        position = _position_from_ai_item(row, akshare_module=akshare_module)
         if position is not None:
             positions.append(position)
     return positions
