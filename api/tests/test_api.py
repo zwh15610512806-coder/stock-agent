@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
@@ -54,6 +55,38 @@ class FakeOcrService:
 class EmptyOcrService:
     async def recognize_positions(self, image_bytes: bytes, mime_type: str = "image/png"):
         return "completed", [], ["| 代码 | 名称 |", "| -- | -- |"]
+
+
+class BrokerSummaryOcrService:
+    async def recognize_positions(self, image_bytes: bytes, mime_type: str = "image/png"):
+        payload = {
+            "portfolio_summary": {
+                "total_assets": 35469.43,
+                "total_pnl": -8182.58,
+                "day_pnl": -1073,
+                "day_pnl_pct": -0.0294,
+                "market_value": 31290,
+                "position_ratio": 0.882,
+            },
+            "positions": [
+                {
+                    "symbol": "300185.SZ",
+                    "name": "通裕重工",
+                    "market": "CN",
+                    "quantity": 4000,
+                    "available_quantity": 4000,
+                    "cost_price": 4.67,
+                    "current_price": 2.87,
+                    "market_value": 11480,
+                    "pnl": -7198.78,
+                    "pnl_pct": -0.38544,
+                    "currency": "CNY",
+                    "source": "ocr",
+                }
+            ],
+            "unmatched_rows": [{"name": "未知股份", "reason": "股票名称未匹配 A 股代码", "raw_fields": {"持仓": "200"}}],
+        }
+        return "completed", payload["positions"], [json.dumps(payload, ensure_ascii=False)]
 
 
 class WatchlistOcrService:
@@ -185,6 +218,26 @@ def test_ocr_positions_endpoint_preserves_raw_lines_when_no_positions() -> None:
     assert body["positions"] == []
     assert body["raw_lines"] == ["| 代码 | 名称 |", "| -- | -- |"]
     assert "缺少持仓数量" in body["message"]
+
+
+def test_ocr_positions_endpoint_returns_broker_summary_and_unmatched_rows() -> None:
+    app = create_app()
+    app.state.ocr_service = BrokerSummaryOcrService()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ocr/positions",
+        files={"file": ("positions.png", b"image", "image/png")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["portfolio_summary"]["total_assets"] == 35469.43
+    assert body["portfolio_summary"]["total_pnl"] == -8182.58
+    assert body["portfolio_summary"]["position_ratio"] == 0.882
+    assert body["positions"][0]["symbol"] == "300185.SZ"
+    assert body["unmatched_rows"] == [{"name": "未知股份", "reason": "股票名称未匹配 A 股代码", "raw_fields": {"持仓": "200"}}]
+    assert "1 行待确认" in body["message"]
 
 
 def test_ocr_positions_endpoint_explains_non_holding_screenshot() -> None:
