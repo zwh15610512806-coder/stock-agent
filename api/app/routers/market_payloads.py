@@ -14,6 +14,8 @@ REALTIME_GROUP_ORDER = [
     "indices-cn",
     "indices-hk",
     "indices-us",
+    "indices-kr",
+    "indices-jp",
     "etf-broad",
     "futures-domestic",
     "futures-overseas",
@@ -23,6 +25,8 @@ REALTIME_GROUP_TITLES = {
     "indices-cn": "A股",
     "indices-hk": "港股",
     "indices-us": "美股",
+    "indices-kr": "韩国市场",
+    "indices-jp": "日经指数",
     "etf-broad": "ETF",
     "futures-domestic": "国内期货",
     "futures-overseas": "海外期货",
@@ -353,7 +357,7 @@ def _intraday_group_payload(group: str, dashboard: MarketDashboardResponse) -> d
 
 
 def _quotes_for_group(group: str, dashboard: MarketDashboardResponse) -> list[QuoteSnapshot]:
-    market_key = {"indices-cn": "CN", "indices-hk": "HK", "indices-us": "US"}.get(group)
+    market_key = {"indices-cn": "CN", "indices-hk": "HK", "indices-us": "US", "indices-kr": "KR", "indices-jp": "JP"}.get(group)
     if not market_key:
         return []
     expected = [symbol for symbol, _ in INDEX_SYMBOLS[market_key]]

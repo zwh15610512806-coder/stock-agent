@@ -1,4 +1,4 @@
-export type MarketCode = "CN" | "HK" | "US";
+export type MarketCode = "CN" | "HK" | "US" | "KR" | "JP";
 export type AiReportAnalysisSkill = "standard" | "serenity";
 
 export interface QuoteSnapshot {
@@ -603,11 +603,31 @@ export interface SourcesStatusResponse {
   disclaimer: string;
 }
 
+export interface OcrPortfolioSummary {
+  total_assets?: number | null;
+  total_pnl?: number | null;
+  day_pnl?: number | null;
+  day_pnl_pct?: number | null;
+  market_value?: number | null;
+  available_cash?: number | null;
+  withdrawable_cash?: number | null;
+  position_ratio?: number | null;
+  currency?: string;
+}
+
+export interface OcrUnmatchedRow {
+  name: string;
+  reason: string;
+  raw_fields: Record<string, unknown>;
+}
+
 export interface OcrPositionsResponse {
   status: string;
   positions: PortfolioPosition[];
   message: string;
   raw_lines?: string[];
+  portfolio_summary?: OcrPortfolioSummary | null;
+  unmatched_rows?: OcrUnmatchedRow[];
 }
 
 export interface AiReportResponse {

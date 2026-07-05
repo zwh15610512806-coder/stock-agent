@@ -86,9 +86,15 @@ function normalizeMarket(value: unknown): MarketCode {
   if (market === "US" || market === "美股") {
     return "US";
   }
+  if (market === "KR" || market === "韩国市场" || market === "韩股") {
+    return "KR";
+  }
+  if (market === "JP" || market === "日本市场" || market === "日股") {
+    return "JP";
+  }
   return "CN";
 }
 
 export function currencyForMarket(market: MarketCode): string {
-  return { CN: "CNY", HK: "HKD", US: "USD" }[market];
+  return { CN: "CNY", HK: "HKD", US: "USD", KR: "KRW", JP: "JPY" }[market];
 }

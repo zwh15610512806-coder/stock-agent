@@ -104,9 +104,9 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 export const api = {
   health: () => requestJson<{ status: string }>("/healthz"),
   sourcesStatus: () => requestJson<SourcesStatusResponse>("/api/sources/status"),
-  marketOverview: (markets: MarketCode[] = ["CN", "HK", "US"]) =>
+  marketOverview: (markets: MarketCode[] = ["CN", "HK", "US", "KR", "JP"]) =>
     requestJson<MarketOverviewResponse>(`/api/market/overview?markets=${markets.join(",")}`),
-  marketDashboard: (markets: MarketCode[] = ["CN", "HK", "US"], period = "daily") =>
+  marketDashboard: (markets: MarketCode[] = ["CN", "HK", "US", "KR", "JP"], period = "daily") =>
     requestJson<MarketDashboardResponse>(`/api/market/dashboard?markets=${markets.join(",")}&period=${period}`),
   marketStatus: () => requestJson<MarketStatusResponse>("/api/market/status"),
   marketDashboardRealtime: () => requestJson<MarketDashboardRealtimeResponse>("/api/market/dashboard/realtime"),
@@ -179,7 +179,7 @@ export const api = {
     requestJson<CompatQuoteSeriesResponse>(
       `/api/quotes?type=daily&symbols=${encodeURIComponent(symbols.join(","))}&limit=${limit}`,
     ),
-  searchSymbols: (q: string, markets: MarketCode[] = ["CN", "HK", "US"]) =>
+  searchSymbols: (q: string, markets: MarketCode[] = ["CN", "HK", "US", "KR", "JP"]) =>
     requestJson<SymbolSearchResult[]>(
       `/api/symbols/search?q=${encodeURIComponent(q)}&markets=${markets.join(",")}`,
     ),

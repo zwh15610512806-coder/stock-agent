@@ -92,6 +92,115 @@ const dashboard: MarketDashboardResponse = {
       delay_label: "免费公开源",
       as_of: "2026-06-23T15:00:00Z",
     },
+    {
+      market: "US",
+      label: "美股",
+      indices: [
+        {
+          symbol: "DJI",
+          name: "道琼斯工业指数",
+          market: "US",
+          price: 52900.07,
+          change: 0,
+          change_pct: 0,
+          volume: 100,
+          turnover: 5290007,
+          currency: "USD",
+          source: "Yahoo Finance/free delayed fallback",
+          as_of: "2026-06-23T15:00:00Z",
+          delay_label: "免费公开源，可能延迟、缺失或被缓存",
+        },
+        {
+          symbol: "SPX",
+          name: "标普500指数",
+          market: "US",
+          price: 7483.24,
+          change: 0,
+          change_pct: 0,
+          volume: 100,
+          turnover: 748324,
+          currency: "USD",
+          source: "Yahoo Finance/free delayed fallback",
+          as_of: "2026-06-23T15:00:00Z",
+          delay_label: "免费公开源，可能延迟、缺失或被缓存",
+        },
+        {
+          symbol: "NDX",
+          name: "纳斯达克100指数",
+          market: "US",
+          price: 29329.21,
+          change: 0,
+          change_pct: 0,
+          volume: 100,
+          turnover: 2932921,
+          currency: "USD",
+          source: "Yahoo Finance/free delayed fallback",
+          as_of: "2026-06-23T15:00:00Z",
+          delay_label: "免费公开源，可能延迟、缺失或被缓存",
+        },
+      ],
+      turnover: 0,
+      sentiment: 50,
+      breadth: { advances: 0, declines: 0, unchanged: 3, limit_up: 0, limit_down: 0 },
+      heatmap: [],
+      source: "Yahoo Finance/free delayed fallback",
+      delay_label: "免费公开源，可能延迟、缺失或被缓存",
+      as_of: "2026-06-23T15:00:00Z",
+    },
+    {
+      market: "KR",
+      label: "韩国市场",
+      indices: [
+        {
+          symbol: "KS11",
+          name: "韩国综合指数",
+          market: "KR",
+          price: 8088.34,
+          change: 9.7,
+          change_pct: 0.12,
+          volume: 100,
+          turnover: 808834,
+          currency: "KRW",
+          source: "Yahoo Finance/free delayed fallback",
+          as_of: "2026-06-23T15:00:00Z",
+          delay_label: "免费公开源，可能延迟、缺失或被缓存",
+        },
+      ],
+      turnover: 0,
+      sentiment: 50,
+      breadth: { advances: 1, declines: 0, unchanged: 0, limit_up: 0, limit_down: 0 },
+      heatmap: [],
+      source: "Yahoo Finance/free delayed fallback",
+      delay_label: "免费公开源，可能延迟、缺失或被缓存",
+      as_of: "2026-06-23T15:00:00Z",
+    },
+    {
+      market: "JP",
+      label: "日本市场",
+      indices: [
+        {
+          symbol: "N225",
+          name: "日经225指数",
+          market: "JP",
+          price: 69744.07,
+          change: -125.54,
+          change_pct: -0.18,
+          volume: 100,
+          turnover: 6974407,
+          currency: "JPY",
+          source: "Yahoo Finance/free delayed fallback",
+          as_of: "2026-06-23T15:00:00Z",
+          delay_label: "免费公开源，可能延迟、缺失或被缓存",
+        },
+      ],
+      turnover: 0,
+      sentiment: 50,
+      breadth: { advances: 0, declines: 1, unchanged: 0, limit_up: 0, limit_down: 0 },
+      heatmap: [],
+      source: "Yahoo Finance/free delayed fallback",
+      delay_label: "免费公开源，可能延迟、缺失或被缓存",
+      as_of: "2026-06-23T15:00:00Z",
+    },
   ],
   a_share_activity: {
     advances: 2600,
@@ -241,6 +350,11 @@ const dashboard: MarketDashboardResponse = {
   ],
   index_sparklines: {
     "000001.SH": [3001, 3008, 3011],
+    DJI: [52820, 52870, 52900.07],
+    SPX: [7440, 7468, 7483.24],
+    NDX: [29200, 29310, 29329.21],
+    KS11: [8060, 8078, 8088.34],
+    N225: [69900, 69820, 69744.07],
   },
   disclaimer: "免费公开源可能延迟、缺失或被缓存。",
 };
@@ -392,6 +506,19 @@ describe("MarketPage dashboard", () => {
     expect(screen.getByText("蓝黛科技")).toBeTruthy();
     expect(screen.getAllByText(/缓存/).length).toBeGreaterThan(0);
     expect(screen.getByText(/部分免费数据源超时/)).toBeTruthy();
+    await waitFor(() => {
+      expect(api.marketDashboard).toHaveBeenCalledWith(["CN", "HK", "US", "KR", "JP"], "daily");
+    });
+    expect(screen.getByText("DJI")).toBeTruthy();
+    expect(screen.getByText("道琼斯工业指数")).toBeTruthy();
+    expect(screen.getByText("SPX")).toBeTruthy();
+    expect(screen.getByText("标普500指数")).toBeTruthy();
+    expect(screen.getByText("NDX")).toBeTruthy();
+    expect(screen.getByText("纳斯达克100指数")).toBeTruthy();
+    expect(screen.getByText("KS11")).toBeTruthy();
+    expect(screen.getByText("韩国综合指数")).toBeTruthy();
+    expect(screen.getByText("N225")).toBeTruthy();
+    expect(screen.getByText("日经225指数")).toBeTruthy();
     expect(screen.queryByText(/数据源暂不可用/)).toBeNull();
     expect(screen.queryByText("大盘趋势")).toBeNull();
     expect(screen.queryByText("市场情绪")).toBeNull();

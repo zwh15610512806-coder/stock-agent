@@ -84,7 +84,7 @@ export function MarketPage() {
   const [newsLoadingMore, setNewsLoadingMore] = useState(false);
   const dashboard = useQuery({
     queryKey: ["market-dashboard", "reference-overview"],
-    queryFn: () => api.marketDashboard(["CN", "HK", "US"], "daily"),
+    queryFn: () => api.marketDashboard(["CN", "HK", "US", "KR", "JP"], "daily"),
     initialData: () =>
       readPersistedQuery<MarketDashboardResponse>(MARKET_DASHBOARD_SNAPSHOT_KEY, {
         maxAgeMs: MARKET_DASHBOARD_SNAPSHOT_MAX_AGE_MS,

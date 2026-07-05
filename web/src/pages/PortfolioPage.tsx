@@ -6,7 +6,7 @@ import { api, apiFailureMessage } from "../lib/api";
 import { currencyForMarket } from "../lib/csv";
 import { formatNumber, toneForPct } from "../lib/format";
 import { usePortfolioStore } from "../lib/store";
-import type { MarketCode, PortfolioPosition, StockInsightResponse } from "../lib/types";
+import type { MarketCode, OcrPortfolioSummary, PortfolioPosition, StockInsightResponse } from "../lib/types";
 
 export function PortfolioPage() {
   const { positions, addPosition, removePosition, setPositions, clear } = usePortfolioStore();
@@ -77,6 +77,8 @@ export function PortfolioPage() {
     const recentOcrWatchlist = ocrMutation.data?.positions.filter(isWatchlistPosition) || [];
     return recentOcrWatchlist.length ? recentOcrWatchlist : positions.filter(isWatchlistPosition);
   }, [ocrMutation.data, positions]);
+  const ocrPortfolioSummary = ocrMutation.data?.portfolio_summary ?? null;
+  const ocrUnmatchedRows = ocrMutation.data?.unmatched_rows || [];
   const screenshotSummary = useMemo(
     () => (watchlistMetricPositions.length ? buildScreenshotSummary(watchlistMetricPositions) : null),
     [watchlistMetricPositions],
@@ -118,7 +120,9 @@ export function PortfolioPage() {
       </section>
 
       <div className="metric-grid portfolio-metrics">
-        {screenshotSummary ? (
+        {ocrPortfolioSummary ? (
+          <BrokerOcrMetrics summary={ocrPortfolioSummary} unmatchedCount={ocrUnmatchedRows.length} />
+        ) : screenshotSummary ? (
           <>
             <MetricCard label="识别股票" value={screenshotSummary.count} detail="截图AI识别" />
             <MetricCard label="最新价合计" value={formatNumber(screenshotSummary.latestTotal)} detail="非市值，仅为截图价格求和" />
@@ -285,6 +289,16 @@ export function PortfolioPage() {
               </button>
             </form>
             {ocrNotice ? <p className="notice-text portfolio-notice">{ocrNotice}</p> : null}
+            {ocrUnmatchedRows.length ? (
+              <div className="portfolio-ocr-unmatched">
+                {ocrUnmatchedRows.map((row) => (
+                  <div className="risk-item portfolio-risk-item warn" key={`${row.name}-${row.reason}`}>
+                    <strong>{row.name}</strong>
+                    <span>{row.reason}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {ocrRawPreview ? (
               <details className="portfolio-ocr-raw" open>
                 <summary>AI 原始识别结果</summary>
@@ -319,6 +333,27 @@ export function PortfolioPage() {
       </section>
 
     </div>
+  );
+}
+
+function BrokerOcrMetrics({ summary, unmatchedCount }: { summary: OcrPortfolioSummary; unmatchedCount: number }) {
+  return (
+    <>
+      <MetricCard label="最新合计" value={formatOptionalNumber(summary.total_assets)} detail={summary.currency || "券商 OCR 汇总"} />
+      <MetricCard
+        label="总盈亏"
+        value={formatOptionalNumber(summary.total_pnl)}
+        detail={`仓位 ${formatOptionalPct(summary.position_ratio)}`}
+        tone={toneForOptional(summary.total_pnl)}
+      />
+      <MetricCard
+        label="当日盈亏"
+        value={`${formatOptionalNumber(summary.day_pnl)} / ${formatOptionalPct(summary.day_pnl_pct)}`}
+        detail="券商截图口径"
+        tone={toneForOptional(summary.day_pnl)}
+      />
+      <MetricCard label="持仓市值" value={formatOptionalNumber(summary.market_value)} detail={`待确认 ${unmatchedCount} 行`} />
+    </>
   );
 }
 

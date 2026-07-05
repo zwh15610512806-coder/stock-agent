@@ -1,13 +1,14 @@
 import base64
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from app.schemas.market import MarketCode
 from app.schemas.portfolio import PortfolioPosition
-from app.services.symbols import currency_for_market, infer_market, normalize_symbol
+from app.services.symbols import currency_for_market, infer_market, normalize_symbol, search_static_symbols
 
 SYMBOL_RE = re.compile(r"(?P<symbol>\d{5}\.HK|\d{6}(?:\.(?:SH|SZ|BJ))?|\b[A-Z]{1,5}\b)")
 QUANTITY_RE = re.compile(r"(?:持仓数量|持仓|数量|可用)\s*(?P<value>[\d,]+(?:\.\d+)?)")
@@ -15,6 +16,22 @@ COST_RE = re.compile(r"(?:成本价|持仓成本|买入均价|成本)\s*(?P<valu
 PRICE_RE = re.compile(r"(?:当前价|最新价|现价|市价)\s*(?P<value>[\d,]+(?:\.\d+)?)")
 HOLDING_FIELD_RE = re.compile(r"(持仓|可用|成本|市值|盈亏|股份余额|证券代码|股票代码|成本价|现价|数量)")
 SECURITY_HINT_RE = re.compile(r"(证券|股票|代码|名称|持仓)")
+INDEX_NAME_TOKENS = {
+    "全球指数",
+    "上证指数",
+    "深证成指",
+    "创业板指",
+    "恒生科技指数",
+    "国企指数",
+    "恒生国企",
+    "恒生指数",
+    "道琼斯工业指数",
+    "标普500指数",
+    "纳斯达克100指数",
+    "韩国综合指数",
+    "日经225指数",
+}
+INDEX_SYMBOL_TOKENS = {"DJI", "SPX", "NDX", "KS11", "N225"}
 
 DOUBAO_SYSTEM_PROMPT = (
     "你是券商持仓截图识别助手。只提取股票持仓行，不要给投资建议。"
@@ -28,6 +45,8 @@ DOUBAO_USER_PROMPT = (
     '{"positions":[{"symbol":"600519.SH","name":"贵州茅台","market":"CN",'
     '"quantity":10,"available_quantity":8,"cost_price":1000,"current_price":1200,'
     '"market_value":12000,"pnl":2000,"pnl_pct":0.2,"currency":"CNY"}]}。'
+    "如果截图包含账户摘要，请返回 portfolio_summary，字段可包含 total_assets、total_pnl、day_pnl、day_pnl_pct、market_value、available_cash、withdrawable_cash、position_ratio。"
+    "如果截图未显示股票代码，只返回股票名称和可识别字段，不允许编造代码；无法确认代码的行放入 unmatched_rows。"
     "market 只能是 CN/HK/US；A股代码请补 .SH/.SZ/.BJ，港股请补 5 位代码 .HK。"
     "数量、成本价、现价必须去掉逗号、人民币符号和单位文本，只输出数字。"
     "没有现价但有市值时用 市值/数量 推导现价；没有成本价但有成本金额时用 成本金额/数量 推导成本价。"
@@ -114,7 +133,25 @@ NAME_IGNORE_TOKENS = {
 }
 
 
-def parse_position_text_lines(lines: list[str]) -> list[PortfolioPosition]:
+@dataclass
+class OcrTextParseResult:
+    positions: list[PortfolioPosition] = field(default_factory=list)
+    portfolio_summary: dict[str, Any] | None = None
+    unmatched_rows: list[dict[str, Any]] = field(default_factory=list)
+
+
+def parse_ocr_text_result(lines: list[str], akshare_module: object | None = None) -> OcrTextParseResult:
+    broker_result = _broker_holding_result_from_lines(lines, akshare_module=akshare_module)
+    if broker_result.positions or broker_result.unmatched_rows or broker_result.portfolio_summary:
+        return broker_result
+    return OcrTextParseResult(positions=_generic_positions_from_lines(lines))
+
+
+def parse_position_text_lines(lines: list[str], akshare_module: object | None = None) -> list[PortfolioPosition]:
+    return parse_ocr_text_result(lines, akshare_module=akshare_module).positions
+
+
+def _generic_positions_from_lines(lines: list[str]) -> list[PortfolioPosition]:
     positions: list[PortfolioPosition] = []
     seen: set[str] = set()
     for position in _watchlist_positions_from_lines(lines):
@@ -129,6 +166,192 @@ def parse_position_text_lines(lines: list[str]) -> list[PortfolioPosition]:
         seen.add(position.symbol)
         positions.append(position)
     return positions
+
+
+def _broker_holding_result_from_lines(lines: list[str], akshare_module: object | None = None) -> OcrTextParseResult:
+    cleaned = [_clean_ocr_line(line) for line in lines if _clean_ocr_line(line)]
+    if not _looks_like_broker_holding_page(cleaned):
+        return OcrTextParseResult()
+
+    summary = _broker_summary_from_lines(cleaned)
+    positions: list[PortfolioPosition] = []
+    unmatched_rows: list[dict[str, Any]] = []
+    start = _broker_table_start(cleaned)
+    index = start if start >= 0 else 0
+    while index + 7 < len(cleaned):
+        name = _broker_row_name(cleaned[index])
+        if not name:
+            index += 1
+            continue
+        row_values = cleaned[index + 1 : index + 8]
+        if not _looks_like_broker_value_block(row_values):
+            index += 1
+            continue
+        raw_fields = {
+            "市值": row_values[0],
+            "盈亏": row_values[1],
+            "盈亏率": row_values[2],
+            "持仓": row_values[3],
+            "可用": row_values[4],
+            "成本价": row_values[5],
+            "现价": row_values[6],
+        }
+        resolved = _resolve_exact_a_share_name(name, akshare_module)
+        if resolved is None:
+            unmatched_rows.append({"name": name, "reason": "股票名称未匹配 A 股代码", "raw_fields": raw_fields})
+        elif resolved == "ambiguous":
+            unmatched_rows.append({"name": name, "reason": "股票名称不是唯一精确匹配", "raw_fields": raw_fields})
+        else:
+            market = infer_market(resolved)
+            positions.append(
+                PortfolioPosition(
+                    symbol=resolved,
+                    name=name,
+                    market=market,
+                    quantity=_safe_float(row_values[3]) or 0,
+                    available_quantity=_safe_float(row_values[4]),
+                    cost_price=_safe_float(row_values[5]) or 0,
+                    current_price=_safe_float(row_values[6]) or 0,
+                    currency=currency_for_market(market),
+                    market_value=_safe_float(row_values[0]),
+                    pnl=_safe_float(row_values[1]),
+                    pnl_pct=_safe_ratio(row_values[2]),
+                    source="ocr",
+                    raw_fields={**raw_fields, "识别类型": "券商持仓页", "代码来源": "A股名称精确匹配"},
+                )
+            )
+        index += 8
+    return OcrTextParseResult(positions=positions, portfolio_summary=summary, unmatched_rows=unmatched_rows)
+
+
+def _looks_like_broker_holding_page(lines: list[str]) -> bool:
+    text = "\n".join(lines)
+    has_account = "总资产" in text or "总盈亏" in text or "总市值" in text
+    has_table = "持仓股" in text and ("成本/现价" in text or ("持仓/可用" in text and "盈亏" in text))
+    return has_account or has_table
+
+
+def _broker_summary_from_lines(lines: list[str]) -> dict[str, Any] | None:
+    summary = {
+        "total_assets": _number_after_label(lines, "总资产"),
+        "total_pnl": _number_after_label(lines, "总盈亏"),
+        "market_value": _number_after_label(lines, "总市值"),
+        "available_cash": _number_after_label(lines, "可用"),
+        "withdrawable_cash": _number_after_label(lines, "可取"),
+        "position_ratio": _position_ratio_from_lines(lines),
+        "currency": "CNY",
+    }
+    day_pnl, day_pnl_pct = _day_pnl_from_lines(lines)
+    summary["day_pnl"] = day_pnl
+    summary["day_pnl_pct"] = day_pnl_pct
+    compact = {key: value for key, value in summary.items() if value is not None or key == "currency"}
+    return compact if len(compact) > 1 else None
+
+
+def _number_after_label(lines: list[str], label: str) -> float | None:
+    for index, line in enumerate(lines):
+        if line == label and index + 1 < len(lines):
+            return _safe_float(lines[index + 1])
+        if line.startswith(label):
+            inline = line.removeprefix(label).strip()
+            if inline:
+                return _safe_float(inline)
+    return None
+
+
+def _day_pnl_from_lines(lines: list[str]) -> tuple[float | None, float | None]:
+    for index, line in enumerate(lines):
+        if line == "当日参考盈亏" and index + 1 < len(lines):
+            return _first_float_and_ratio(lines[index + 1])
+        if line.startswith("当日参考盈亏"):
+            return _first_float_and_ratio(line.removeprefix("当日参考盈亏"))
+    return None, None
+
+
+def _position_ratio_from_lines(lines: list[str]) -> float | None:
+    for line in lines:
+        if "仓位" not in line:
+            continue
+        match = re.search(r"-?\d+(?:\.\d+)?%", line)
+        if match:
+            return _safe_ratio(match.group(0))
+    return None
+
+
+def _first_float_and_ratio(text: str) -> tuple[float | None, float | None]:
+    normalized = _normalize_number_text(text)
+    numbers = re.findall(r"-?\d+(?:\.\d+)?%?", normalized)
+    first = _safe_float(numbers[0]) if numbers else None
+    ratio = _safe_ratio(next((item for item in numbers[1:] if item.endswith("%")), None))
+    return first, ratio
+
+
+def _normalize_number_text(text: Any) -> str:
+    return (
+        str(text or "")
+        .replace("−", "-")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("－", "-")
+        .replace(",", "")
+        .replace("，", "")
+        .replace("¥", "")
+        .replace("￥", "")
+        .strip()
+    )
+
+
+def _broker_table_start(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        if line == "成本/现价":
+            return index + 1
+    for index, line in enumerate(lines):
+        if line == "持仓股":
+            return index + 1
+    return -1
+
+
+def _broker_row_name(line: str) -> str:
+    if line in NAME_IGNORE_TOKENS or line in {"查看已清仓股票", "持仓管理", "批量买入", "批量卖出", "止盈止损", "持仓资讯", "资产分析"}:
+        return ""
+    if SYMBOL_RE.search(line) or _safe_float(line) is not None or _looks_like_percent(line):
+        return ""
+    if _is_index_like_name(line):
+        return ""
+    if not re.search(r"[\u4e00-\u9fff]", line):
+        return ""
+    if len(line) > 12:
+        return ""
+    return line
+
+
+def _looks_like_broker_value_block(values: list[str]) -> bool:
+    if len(values) != 7:
+        return False
+    numeric = [_safe_float(item) for item in values]
+    return (
+        numeric[0] is not None
+        and numeric[1] is not None
+        and _safe_ratio(values[2]) is not None
+        and numeric[3] is not None
+        and numeric[4] is not None
+        and numeric[5] is not None
+        and numeric[6] is not None
+    )
+
+
+def _resolve_exact_a_share_name(name: str, akshare_module: object | None = None) -> str | None:
+    matches = [item for item in search_static_symbols(name, {"CN"}, akshare_module=akshare_module) if item.name == name]
+    unique = {item.symbol for item in matches}
+    if len(unique) == 1:
+        return next(iter(unique))
+    if len(unique) > 1:
+        return "ambiguous"
+    return None
+
+
+def _clean_ocr_line(line: str) -> str:
+    return " ".join(str(line).replace("｜", "|").split()).strip()
 
 
 def has_watchlist_fallback_positions(positions: list[PortfolioPosition]) -> bool:
@@ -425,6 +648,10 @@ def _watchlist_name(line: str) -> str:
     token = _security_name_from_prefix(normalized)
     if not token or token.upper() in NAME_IGNORE_TOKENS:
         return ""
+    if _is_index_like_name(token):
+        return ""
+    if token.endswith(("指数", "成指", "板指")):
+        return ""
     if len(token) > 12:
         return ""
     return token
@@ -441,7 +668,7 @@ def _single_price(line: str) -> float | None:
 
 
 def _looks_like_percent(line: str) -> bool:
-    return re.fullmatch(r"[+-]?\d{1,4}(?:\.\d+)?%[▼▲]?", line.strip()) is not None
+    return re.fullmatch(r"[+-]?\d{1,4}(?:\.\d+)?%[▼▲]?", _normalize_number_text(line)) is not None
 
 
 def _first_symbol_text(lines: list[str]) -> str | None:
@@ -478,9 +705,16 @@ def _security_name_from_prefix(prefix: str) -> str:
     return ""
 
 
+def _is_index_like_name(value: str) -> bool:
+    normalized = value.strip()
+    if not normalized:
+        return False
+    return normalized in INDEX_NAME_TOKENS or normalized.upper() in INDEX_SYMBOL_TOKENS
+
+
 def _numbers_after_symbol(text: str) -> list[float]:
     values: list[float] = []
-    for item in re.findall(r"[\d,]+(?:\.\d+)?", text):
+    for item in re.findall(r"-?[\d,]+(?:\.\d+)?", _normalize_number_text(text)):
         value = _safe_float(item)
         if value is not None:
             values.append(value)
@@ -489,7 +723,7 @@ def _numbers_after_symbol(text: str) -> list[float]:
 
 def _safe_float(value: Any) -> float | None:
     if isinstance(value, str):
-        cleaned = value.replace(",", "").replace("￥", "").replace("¥", "").strip()
+        cleaned = _normalize_number_text(value)
         match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
         if not match:
             value = cleaned

@@ -193,8 +193,18 @@ class DashboardAkShare:
 
 class DashboardMarketService(MarketDataService):
     async def _fetch_primary_quote(self, symbol: str) -> QuoteSnapshot:
-        market = "HK" if symbol.endswith(".HK") else "US" if symbol in {"DJI", "SPX", "NDX"} else "CN"
-        currency = {"CN": "CNY", "HK": "HKD", "US": "USD"}[market]
+        market = (
+            "HK"
+            if symbol.endswith(".HK")
+            else "KR"
+            if symbol == "KS11"
+            else "JP"
+            if symbol == "N225"
+            else "US"
+            if symbol in {"DJI", "SPX", "NDX"}
+            else "CN"
+        )
+        currency = {"CN": "CNY", "HK": "HKD", "US": "USD", "KR": "KRW", "JP": "JPY"}[market]
         return QuoteSnapshot(
             symbol=symbol,
             name=f"Index {symbol}",
@@ -769,6 +779,34 @@ async def test_dashboard_reports_unavailable_without_fake_data(tmp_path) -> None
     assert dashboard.dragon_tiger == []
     assert any(status.status == "unavailable" for status in dashboard.source_status)
     assert dashboard.a_share_turnover is None
+
+
+def test_dashboard_endpoint_default_markets_include_korea_and_japan(tmp_path) -> None:
+    app = create_app()
+    app.state.market_service = DashboardMarketService(
+        cache_ttl_seconds=90,
+        akshare_module=DashboardAkShare(),
+        snapshot_cache=MarketSnapshotCache(tmp_path / "market_cache.sqlite3"),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/market/dashboard?period=daily")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [market["market"] for market in body["markets"]] == ["CN", "HK", "US", "KR", "JP"]
+    assert [quote["symbol"] for market in body["markets"] for quote in market["indices"]] == [
+        "000001.SH",
+        "399001.SZ",
+        "399006.SZ",
+        "HSTECH.HK",
+        "HSCEI.HK",
+        "DJI",
+        "SPX",
+        "NDX",
+        "KS11",
+        "N225",
+    ]
 
 
 def test_dashboard_endpoint_returns_stable_contract(tmp_path) -> None:

@@ -23,13 +23,13 @@ describe("App Xirang shell", () => {
   it("renders the Xirang top navigation and utility controls", () => {
     renderApp();
 
-    expect(screen.getAllByText("息壤投研").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("裕见投研").length).toBeGreaterThan(0);
     const primaryNav = screen.getByLabelText("主导航");
     expect(within(primaryNav).getByRole("link", { name: "市场" }).getAttribute("href")).toBe("/market");
     expect(within(primaryNav).getByRole("link", { name: "宏观" }).getAttribute("href")).toBe("/macro");
     expect(within(primaryNav).getByRole("link", { name: "选股" }).getAttribute("href")).toBe("/stocks");
     expect(within(primaryNav).getByRole("link", { name: "我的持仓" }).getAttribute("href")).toBe("/portfolio");
-    expect(within(primaryNav).getByRole("link", { name: "检索" }).getAttribute("href")).toBe("/search");
+    expect(within(primaryNav).queryByRole("link", { name: "检索" })).toBeNull();
     expect(screen.getByPlaceholderText("搜索股票、持仓、标签...")).toBeTruthy();
     expect(screen.getByRole("button", { name: "时光机" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "切换主题" })).toBeTruthy();

@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-MarketCode = Literal["CN", "HK", "US"]
+MarketCode = Literal["CN", "HK", "US", "KR", "JP"]
 DashboardCacheStatus = Literal["live", "stale", "partial", "unavailable"]
 DashboardSourceState = Literal["live", "stale", "unavailable"]
 

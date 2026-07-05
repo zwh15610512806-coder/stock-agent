@@ -55,18 +55,30 @@ class FakeMarketService:
             price = 2.56
             change_pct = 1.19
             source = "sina-free-delayed"
+        elif symbol == "KS11":
+            name = "韩国综合指数"
+            price = 8088.34
+            change_pct = 0.12
+            source = "Yahoo Finance/free delayed fallback"
+        elif symbol == "N225":
+            name = "日经225指数"
+            price = 69744.07
+            change_pct = -0.18
+            source = "Yahoo Finance/free delayed fallback"
         else:
             raise RuntimeError(f"no quote for {symbol}")
+        market = "KR" if symbol == "KS11" else "JP" if symbol == "N225" else "CN"
+        currency = {"CN": "CNY", "KR": "KRW", "JP": "JPY"}[market]
         return QuoteSnapshot(
             symbol=symbol,
             name=name,
-            market="CN",
+            market=market,
             price=price,
             change=round(price * change_pct / 100, 4),
             change_pct=change_pct,
             volume=1000,
             turnover=price * 1000,
-            currency="CNY",
+            currency=currency,
             source=source,
             as_of=datetime(2026, 6, 24, 15, 0, tzinfo=UTC),
             delay_label="free delayed",
@@ -435,12 +447,41 @@ def test_market_dashboard_realtime_returns_danginvest_workbench_contract() -> No
     body = response.json()
     assert body["cache_status"] == "live"
     assert body["stale"] is False
-    assert [group["id"] for group in body["groups"]] == ["indices-cn", "indices-hk", "indices-us", "etf-broad", "futures-domestic", "futures-overseas"]
+    assert [group["id"] for group in body["groups"]] == [
+        "indices-cn",
+        "indices-hk",
+        "indices-us",
+        "indices-kr",
+        "indices-jp",
+        "etf-broad",
+        "futures-domestic",
+        "futures-overseas",
+    ]
     assert body["groups"][0]["items"][0]["symbol"] == "000001.SH"
     assert body["overview"]["data"]["totalTurnoverYuan"] == 1180000000000
     assert body["overview"]["data"]["upCount"] == 3200
     assert body["overview"]["data"]["mainInflowYuan"] == 170000000
     assert body["data"]["market_news"][0]["source"] == "model-web-search"
+
+
+def test_quotes_compat_supports_korea_and_japan_index_groups() -> None:
+    client = make_client()
+
+    kr_response = client.get("/api/quotes", params={"group": "indices-kr"})
+    jp_response = client.get("/api/quotes", params={"group": "indices-jp"})
+
+    assert kr_response.status_code == 200
+    assert jp_response.status_code == 200
+    kr_body = kr_response.json()
+    jp_body = jp_response.json()
+    assert kr_body["status"] == "live"
+    assert jp_body["status"] == "live"
+    assert [(item["symbol"], item["name"], item["market"]) for item in kr_body["items"]] == [
+        ("KS11", "韩国综合指数", "KR")
+    ]
+    assert [(item["symbol"], item["name"], item["market"]) for item in jp_body["items"]] == [
+        ("N225", "日经225指数", "JP")
+    ]
 
 
 def test_market_dashboard_intraday_returns_grouped_real_sparklines() -> None:

@@ -10,6 +10,7 @@ from app.services.portfolio import DISCLAIMER
 from app.services.symbols import normalize_symbol
 
 router = APIRouter(prefix="/api/market", tags=["market"])
+DEFAULT_DASHBOARD_MARKETS: tuple[MarketCode, ...] = ("CN", "HK", "US", "KR", "JP")
 
 
 @router.get("/overview")
@@ -20,7 +21,7 @@ async def overview(
 ) -> Any:
     service: MarketDataService = request.app.state.market_service
     if markets is None or date is not None:
-        dashboard_response = await service.dashboard(["CN", "HK", "US"], "daily")
+        dashboard_response = await service.dashboard(list(DEFAULT_DASHBOARD_MARKETS), "daily")
         return danginvest_overview_snapshot(dashboard_response, date)
     requested = _parse_markets(markets)
     return MarketOverviewResponse(markets=await service.overview(requested), disclaimer=DISCLAIMER)
@@ -30,7 +31,7 @@ async def overview(
 async def dashboard(
     request: Request,
     response: Response,
-    markets: str = Query(default="CN,HK,US"),
+    markets: str = Query(default="CN,HK,US,KR,JP"),
     period: str = Query(default="daily", pattern="^(daily|weekly|monthly)$"),
 ) -> MarketDashboardResponse:
     service: MarketDataService = request.app.state.market_service
@@ -61,10 +62,10 @@ async def candles(
 
 
 def _parse_markets(value: str) -> list[MarketCode]:
-    allowed: set[MarketCode] = {"CN", "HK", "US"}
+    allowed: set[MarketCode] = {"CN", "HK", "US", "KR", "JP"}
     output: list[MarketCode] = []
     for item in value.split(","):
         market = item.strip().upper()
         if market in allowed and market not in output:
             output.append(market)  # type: ignore[arg-type]
-    return output or ["CN", "HK", "US"]
+    return output or list(DEFAULT_DASHBOARD_MARKETS)

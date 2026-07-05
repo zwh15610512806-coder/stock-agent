@@ -29,12 +29,15 @@ from app.services.stocks import StockScreenerService
 from app.services.symbols import STATIC_SYMBOLS, _a_share_pool, normalize_symbol, resolve_symbol_query, search_static_symbols
 
 router = APIRouter(prefix="/api", tags=["compat"])
+INDEX_MARKET_ORDER: tuple[MarketCode, ...] = ("CN", "HK", "US", "KR", "JP")
 
 INDEX_GROUPS: dict[str, list[str]] = {
     "indices-cn": [symbol for symbol, _ in INDEX_SYMBOLS["CN"]],
     "indices-hk": [symbol for symbol, _ in INDEX_SYMBOLS["HK"]],
     "indices-us": [symbol for symbol, _ in INDEX_SYMBOLS["US"]],
-    "indices-all": [symbol for market in ("CN", "HK", "US") for symbol, _ in INDEX_SYMBOLS[market]],  # type: ignore[index]
+    "indices-kr": [symbol for symbol, _ in INDEX_SYMBOLS["KR"]],
+    "indices-jp": [symbol for symbol, _ in INDEX_SYMBOLS["JP"]],
+    "indices-all": [symbol for market in INDEX_MARKET_ORDER for symbol, _ in INDEX_SYMBOLS[market]],
 }
 
 
@@ -119,7 +122,7 @@ async def market_status() -> dict[str, Any]:
 async def market_dashboard_realtime(request: Request, response: Response) -> Any:
     set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
     try:
-        dashboard = await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+        dashboard = await _market_service(request).dashboard(list(INDEX_MARKET_ORDER), "daily")
         return danginvest_realtime_dashboard(dashboard)
     except Exception as exc:
         fallback = await _danginvest_public_json(request, "/api/market/dashboard/realtime", {}, "danginvest:dashboard:realtime")
@@ -135,7 +138,7 @@ async def market_dashboard_intraday(
     group: str | None = Query(default=None),
 ) -> dict[str, Any]:
     requested_groups = _parse_group_list(group or groups)
-    dashboard = await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+    dashboard = await _market_service(request).dashboard(list(INDEX_MARKET_ORDER), "daily")
     payload = danginvest_intraday_dashboard(dashboard, requested_groups)
     if payload["status"] == "live":
         return payload
@@ -158,7 +161,7 @@ async def market_news(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
-    dashboard = await _market_service(request).dashboard(["CN", "HK", "US"], "daily")
+    dashboard = await _market_service(request).dashboard(list(INDEX_MARKET_ORDER), "daily")
     local = danginvest_news_response(dashboard.market_news, limit, offset, dashboard.as_of)
     if local["count"] >= offset + limit or local["data"]:
         return local
@@ -209,7 +212,7 @@ async def market_date_snapshot(
     set_shared_cache_header(response, s_maxage=30, stale_while_revalidate=300)
     service = _market_service(request)
     try:
-        dashboard = await service.dashboard(["CN", "HK", "US"], "daily")
+        dashboard = await service.dashboard(list(INDEX_MARKET_ORDER), "daily")
     except Exception as exc:
         fallback = await _danginvest_public_json(
             request,
@@ -329,7 +332,7 @@ async def stock_catalog_lookup(
     codes: str = Query(..., min_length=1),
 ) -> dict[str, Any]:
     requested = [normalize_symbol(code.strip(), None) for code in codes.split(",") if code.strip()]
-    catalog = {item.symbol: item for item in _catalog_items({"CN", "HK", "US"}, 2000)}
+    catalog = {item.symbol: item for item in _catalog_items(set(INDEX_MARKET_ORDER), 2000)}
     items = [catalog[symbol].model_dump(mode="json") for symbol in requested if symbol in catalog]
     missing = [symbol for symbol in requested if symbol not in catalog]
     return {
@@ -343,7 +346,7 @@ async def stock_catalog_lookup(
 @router.get("/stocks/v2/search")
 async def stock_search(
     q: str = Query(default=""),
-    markets: str = Query(default="CN,HK,US"),
+    markets: str = Query(default="CN,HK,US,KR,JP"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     requested_markets = _parse_markets(markets)
@@ -569,7 +572,7 @@ async def _real_candles(service: Any, symbol: str, period: str, limit: int) -> l
 
 
 def _catalog_items(markets: set[str], limit: int) -> list[SymbolSearchResult]:
-    allowed = {market for market in markets if market in {"CN", "HK", "US"}}
+    allowed = {market for market in markets if market in set(INDEX_MARKET_ORDER)}
     items: list[SymbolSearchResult] = []
     seen: set[str] = set()
     for item in STATIC_SYMBOLS:
@@ -866,7 +869,7 @@ def _a_share_symbol_from_code(code: str) -> str:
 
 
 def _parse_markets(value: str) -> set[MarketCode]:
-    allowed: set[MarketCode] = {"CN", "HK", "US"}
+    allowed: set[MarketCode] = set(INDEX_MARKET_ORDER)
     parsed = {item.strip().upper() for item in value.split(",")}
     return {item for item in parsed if item in allowed} or allowed  # type: ignore[return-value]
 

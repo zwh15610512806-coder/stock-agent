@@ -144,6 +144,65 @@ describe("PortfolioPage OCR upload", () => {
     expect(container.querySelector(".portfolio-main-workspace")).toBeTruthy();
   });
 
+  it("shows broker OCR summary cards and unmatched rows without importing unresolved names", async () => {
+    const brokerPosition: PortfolioPosition = {
+      symbol: "300185.SZ",
+      name: "通裕重工",
+      market: "CN",
+      quantity: 4000,
+      available_quantity: 4000,
+      cost_price: 4.67,
+      current_price: 2.87,
+      market_value: 11480,
+      pnl: -7198.78,
+      pnl_pct: -0.38544,
+      currency: "CNY",
+      source: "ocr",
+      raw_fields: { 代码来源: "A股名称精确匹配" },
+    };
+    vi.mocked(api.uploadOcr).mockResolvedValue({
+      status: "completed",
+      positions: [brokerPosition],
+      message: "已识别券商持仓页，1 行待确认。",
+      portfolio_summary: {
+        total_assets: 35469.43,
+        total_pnl: -8182.58,
+        day_pnl: -1073,
+        day_pnl_pct: -0.0294,
+        market_value: 31290,
+        available_cash: 4179.43,
+        withdrawable_cash: 4179.37,
+        position_ratio: 0.882,
+        currency: "CNY",
+      },
+      unmatched_rows: [
+        {
+          name: "未知股份",
+          reason: "股票名称未匹配 A 股代码",
+          raw_fields: { 市值: "2,000.00", 持仓: "200", 成本价: "10.10", 现价: "10.00" },
+        },
+      ],
+    });
+
+    const { container } = renderPortfolioPage();
+    uploadScreenshot(container);
+
+    expect(await screen.findByText("35,469.43")).toBeTruthy();
+    expect(screen.getByText("-8,182.58")).toBeTruthy();
+    expect(screen.getByText("-1,073.00 / -2.94%")).toBeTruthy();
+    expect(screen.getByText(/待确认 1 行/)).toBeTruthy();
+    expect(screen.getByText("通裕重工")).toBeTruthy();
+    expect(screen.getByText("300185.SZ")).toBeTruthy();
+    expect(screen.getByText("11,480.00")).toBeTruthy();
+    expect(screen.getByText("-38.54%")).toBeTruthy();
+    expect(screen.getByText("未知股份")).toBeTruthy();
+    expect(screen.getByText("股票名称未匹配 A 股代码")).toBeTruthy();
+    await waitFor(() => {
+      expect(usePortfolioStore.getState().positions).toEqual([brokerPosition]);
+    });
+    expect(container.textContent).not.toContain("上证指数");
+  });
+
   it("syncs OCR positions by symbol and keeps local positions outside the screenshot", async () => {
     const localOnly: PortfolioPosition = {
       symbol: "000001.SZ",

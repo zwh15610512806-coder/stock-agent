@@ -82,7 +82,9 @@ T = TypeVar("T")
 INDEX_SYMBOLS: dict[MarketCode, list[tuple[str, str]]] = {
     "CN": [("000001.SH", "上证指数"), ("399001.SZ", "深证成指"), ("399006.SZ", "创业板指")],
     "HK": [("HSTECH.HK", "恒生科技指数"), ("HSCEI.HK", "恒生国企")],
-    "US": [("DJI", "道琼斯"), ("SPX", "标普500"), ("NDX", "纳斯达克100")],
+    "US": [("DJI", "道琼斯工业指数"), ("SPX", "标普500指数"), ("NDX", "纳斯达克100指数")],
+    "KR": [("KS11", "韩国综合指数")],
+    "JP": [("N225", "日经225指数")],
 }
 INDEX_SYMBOL_SET = {symbol for pairs in INDEX_SYMBOLS.values() for symbol, _ in pairs} | {"HSI.HK"}
 
@@ -105,6 +107,8 @@ HEATMAP: dict[MarketCode, list[MarketHeatItem]] = {
         MarketHeatItem(name="能源", change_pct=-0.25, turnover=240, direction="down"),
         MarketHeatItem(name="金融", change_pct=0.18, turnover=260, direction="up"),
     ],
+    "KR": [],
+    "JP": [],
 }
 
 
@@ -147,7 +151,7 @@ class MarketDataService:
             sentiment = _sentiment_from_quotes(index_quotes, advances, declines)
             return MarketOverviewItem(
                 market=market,
-                label={"CN": "A股", "HK": "港股", "US": "美股"}[market],
+                label={"CN": "A股", "HK": "港股", "US": "美股", "KR": "韩国市场", "JP": "日本市场"}[market],
                 indices=index_quotes,
                 turnover=round(sum(item.turnover for item in index_quotes) / 100000000, 2),
                 sentiment=sentiment,
@@ -198,7 +202,7 @@ class MarketDataService:
         return search_static_symbols(query, markets)
 
     async def dashboard(self, markets: list[MarketCode], period: str) -> MarketDashboardResponse:
-        normalized_markets = markets or ["CN", "HK", "US"]
+        normalized_markets = markets or ["CN", "HK", "US", "KR", "JP"]
         normalized_period = period if period in {"daily", "weekly", "monthly"} else "daily"
         source_timeout = self.dashboard_source_timeout_seconds
         slow_source_timeout = self.dashboard_slow_source_timeout_seconds
@@ -497,7 +501,7 @@ class MarketDataService:
             )
             return MarketOverviewItem(
                 market=market,
-                label={"CN": "A股", "HK": "港股", "US": "美股"}[market],
+                label={"CN": "A股", "HK": "港股", "US": "美股", "KR": "韩国市场", "JP": "日本市场"}[market],
                 indices=live_quotes,
                 turnover=turnover,
                 sentiment=sentiment,
@@ -1175,7 +1179,7 @@ class MarketDataService:
     def _sample_quote(self, symbol: str) -> QuoteSnapshot:
         market = infer_market(symbol)
         seed = sum(ord(char) for char in symbol)
-        base = {"CN": 100, "HK": 80, "US": 160}[market]
+        base = {"CN": 100, "HK": 80, "US": 160, "KR": 2500, "JP": 30000}[market]
         price = base + seed % 120
         change_pct = round(math.sin(seed) * 1.8, 4)
         change = round(price * change_pct / 100, 4)

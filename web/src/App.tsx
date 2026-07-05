@@ -2,7 +2,6 @@ import { FormEvent, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import {
   BarChart3,
-  BookOpen,
   CalendarDays,
   CircleGauge,
   Layers,
@@ -27,7 +26,6 @@ const navItems = [
   { to: "/stocks", label: "选股", icon: TrendingUp },
   { to: "/portfolio", label: "我的持仓", icon: Layers },
   { to: "/ai", label: "AI研报", icon: Sparkles },
-  { to: "/search", label: "检索", icon: BookOpen },
 ];
 
 export function App() {
@@ -53,9 +51,9 @@ export function App() {
             {isMenuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
 
-          <NavLink to="/market" className="xirang-brand" aria-label="息壤投研">
+          <NavLink to="/market" className="xirang-brand" aria-label="裕见投研">
             <TrendingUp size={23} />
-            <span>息壤投研</span>
+            <span>裕见投研</span>
           </NavLink>
 
           <nav className="xirang-nav" aria-label="主导航">
@@ -126,7 +124,7 @@ export function App() {
           <div className="xirang-footer-brand">
             <NavLink to="/market" className="xirang-brand">
               <TrendingUp size={22} />
-              <span>息壤投研</span>
+              <span>裕见投研</span>
             </NavLink>
             <p>面向股票、持仓与 AI 研究的本地投研分析平台。</p>
           </div>
@@ -143,7 +141,6 @@ export function App() {
             links={[
               { label: "真实数据源", to: "/market" },
               { label: "AI 研报", to: "/ai" },
-              { label: "检索", to: "/search" },
             ]}
           />
           <div className="xirang-footer-column">
@@ -154,7 +151,7 @@ export function App() {
           </div>
         </div>
         <div className="xirang-footer-bottom">
-          <span>© 2026 息壤投研</span>
+          <span>© 2026 裕见投研</span>
           <span>
             <Sparkles size={13} /> 免费延迟行情，仅供研究
           </span>

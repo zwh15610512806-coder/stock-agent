@@ -12,6 +12,11 @@ STATIC_SYMBOLS: list[SymbolSearchResult] = [
     SymbolSearchResult(symbol="HSTECH.HK", name="恒生科技指数", market="HK", currency="HKD"),
     SymbolSearchResult(symbol="HSCEI.HK", name="恒生国企", market="HK", currency="HKD"),
     SymbolSearchResult(symbol="HSI.HK", name="恒生指数", market="HK", currency="HKD"),
+    SymbolSearchResult(symbol="DJI", name="道琼斯工业指数", market="US", currency="USD", type="index"),
+    SymbolSearchResult(symbol="SPX", name="标普500指数", market="US", currency="USD", type="index"),
+    SymbolSearchResult(symbol="NDX", name="纳斯达克100指数", market="US", currency="USD", type="index"),
+    SymbolSearchResult(symbol="KS11", name="韩国综合指数", market="KR", currency="KRW", type="index"),
+    SymbolSearchResult(symbol="N225", name="日经225指数", market="JP", currency="JPY", type="index"),
     SymbolSearchResult(symbol="600519.SH", name="贵州茅台", market="CN", currency="CNY"),
     SymbolSearchResult(symbol="000858.SZ", name="五粮液", market="CN", currency="CNY"),
     SymbolSearchResult(symbol="300750.SZ", name="宁德时代", market="CN", currency="CNY"),
@@ -33,6 +38,15 @@ def normalize_symbol(value: str, market: MarketCode | None = None) -> str:
     raw = value.strip().upper()
     if not raw:
         return raw
+    index_aliases = {
+        "^DJI": "DJI",
+        "^GSPC": "SPX",
+        "^NDX": "NDX",
+        "^KS11": "KS11",
+        "^N225": "N225",
+    }
+    if raw in index_aliases:
+        return index_aliases[raw]
     if raw.endswith(".SS"):
         return raw.removesuffix(".SS") + ".SH"
     if raw.endswith((".SH", ".SZ", ".BJ", ".HK")):
@@ -42,7 +56,7 @@ def normalize_symbol(value: str, market: MarketCode | None = None) -> str:
         return raw
     if market == "HK":
         return raw.zfill(5) + ".HK" if raw.isdigit() else raw
-    if market == "US":
+    if market in {"US", "KR", "JP"}:
         return raw
     if market == "CN" and raw.isdigit():
         return _normalize_cn_code(raw)
@@ -57,11 +71,15 @@ def infer_market(symbol: str) -> MarketCode:
         return "HK"
     if normalized.endswith((".SH", ".SZ", ".BJ")):
         return "CN"
+    if normalized == "KS11":
+        return "KR"
+    if normalized == "N225":
+        return "JP"
     return "US"
 
 
 def currency_for_market(market: MarketCode) -> str:
-    return {"CN": "CNY", "HK": "HKD", "US": "USD"}[market]
+    return {"CN": "CNY", "HK": "HKD", "US": "USD", "KR": "KRW", "JP": "JPY"}[market]
 
 
 def search_static_symbols(
@@ -126,6 +144,8 @@ def yahoo_symbol(symbol: str) -> str:
         "DJI": "^DJI",
         "SPX": "^GSPC",
         "NDX": "^NDX",
+        "KS11": "^KS11",
+        "N225": "^N225",
     }
     if normalized in index_map:
         return index_map[normalized]
