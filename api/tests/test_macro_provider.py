@@ -106,7 +106,33 @@ async def test_danginvest_provider_normalizes_xray_and_targets_payloads() -> Non
                         "equipmentRenewalRatio": 0.64,
                     }
                 ],
-                "diagnostics": [],
+                "nominalGdp": {
+                    "latest": 4.84,
+                    "unit": "pct",
+                    "points": [{"periodEnd": "2026-03-31", "value": 4.84}],
+                },
+                "crossIndex": {
+                    "hs300": {
+                        "periodEnd": "2026-03-31",
+                        "periodLabel": "2026 Q1",
+                        "revenueYoy": 0.042,
+                        "profitYoy": -0.018,
+                        "inventoryYoy": 0.031,
+                        "cashConversionRatio": 1.18,
+                    }
+                },
+                "insights": {
+                    "headline": "企业端企稳",
+                    "tone": "stress",
+                    "facts": ["营收同比 +4.2%。", "现金转化率 1.18x。"],
+                    "diagnoses": [{"id": "cash", "label": "利润现金含量", "severity": "medium", "text": "现金转化偏弱。"}],
+                },
+                "diagnostics": {
+                    "requestedQuarters": 40,
+                    "returnedPoints": 1,
+                    "filters": {"universeType": "index", "universeCode": "000300.SH", "sectorScope": "non_financial"},
+                    "selectedVariant": {"latestPeriod": "2026-03-31", "latestAsOfDate": "2026-05-08"},
+                },
             },
         )
 
@@ -126,9 +152,36 @@ async def test_danginvest_provider_normalizes_xray_and_targets_payloads() -> Non
     assert xray.latest.period == "2026 Q1"
     assert xray.latest.equipmentRenewalRatio == 0.64
     assert xray.points[0].date == "2026-03-31"
+    assert round(xray.sample.coverage, 4) == round(233 / 248, 4)
+    assert len(xray.nominalGdp) == 1
+    assert len(xray.crossIndex) == 1
+    assert xray.insights[0].title == "企业端企稳"
+    assert "requestedQuarters" in xray.diagnostics[0]
     assert xray.source_status[0].source == "danginvest"
     assert targets.items[0].code == "512200.SH"
     assert targets.targets[0].name == "南方中证全指房地产ETF"
+
+
+async def test_danginvest_provider_uses_static_index_targets_without_upstream_call() -> None:
+    from app.services.macro_provider import DangInvestMacroProvider
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(500, json={"error": "index targets should not call upstream"})
+
+    provider = DangInvestMacroProvider(
+        base_url="https://dang-invest.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    targets = await provider.targets(universe_type="index", lookback=6, target_source="stock_basic_full_v1")
+
+    assert calls == []
+    assert targets.status == "live"
+    assert "index:000300.SH" in {item.id for item in targets.items}
+    assert targets.source_status[0].source == "static-index-targets"
 
 
 async def test_hybrid_macro_provider_falls_back_to_public_provider() -> None:

@@ -91,6 +91,59 @@ describe("PortfolioPage OCR upload", () => {
     expect(await screen.findByText("OCR 识别暂不可用")).toBeTruthy();
   });
 
+  it("removes CSV import and keeps screenshot OCR as the only top import action", () => {
+    const { container } = renderPortfolioPage();
+
+    expect(screen.queryByText("CSV")).toBeNull();
+    expect(screen.getByText("截图AI识别")).toBeTruthy();
+    expect(container.querySelector('input[accept=".csv,text/csv"]')).toBeNull();
+  });
+
+  it("shows screenshot-first metrics after importing watchlist OCR rows", async () => {
+    vi.mocked(api.uploadOcr).mockResolvedValue({
+      status: "completed",
+      positions: [
+        {
+          symbol: "600460.SH",
+          name: "士兰微",
+          market: "CN",
+          quantity: 0,
+          cost_price: 44.8,
+          current_price: 44.8,
+          currency: "CNY",
+          source: "ocr-watchlist",
+          raw_fields: { 识别类型: "自选/行情列表", 涨幅: "+7.10%" },
+        },
+        {
+          symbol: "300185.SZ",
+          name: "通裕重工",
+          market: "CN",
+          quantity: 0,
+          cost_price: 3.01,
+          current_price: 3.01,
+          currency: "CNY",
+          source: "ocr-watchlist",
+          raw_fields: { 识别类型: "自选/行情列表", 涨幅: "-2.43%" },
+        },
+      ],
+      message: "截图缺少持仓数量和成本价。",
+    });
+
+    const { container } = renderPortfolioPage();
+    uploadScreenshot(container);
+
+    expect(await screen.findByText("识别股票")).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("最新价合计")).toBeTruthy();
+    expect(screen.getByText("47.81")).toBeTruthy();
+    expect(screen.getByText("上涨/下跌")).toBeTruthy();
+    expect(screen.getByText("1 / 1")).toBeTruthy();
+    expect(screen.getByText("数据完整度")).toBeTruthy();
+    expect(screen.getByText("行情列表")).toBeTruthy();
+    expect(screen.getByText(/缺少数量\/成本/)).toBeTruthy();
+    expect(container.querySelector(".portfolio-main-workspace")).toBeTruthy();
+  });
+
   it("syncs OCR positions by symbol and keeps local positions outside the screenshot", async () => {
     const localOnly: PortfolioPosition = {
       symbol: "000001.SZ",
@@ -147,6 +200,18 @@ describe("PortfolioPage OCR upload", () => {
     expect(screen.getByText("AI 原始识别结果")).toBeTruthy();
     expect(screen.getByText(/600519/)).toBeTruthy();
     expect(usePortfolioStore.getState().positions).toEqual([]);
+  });
+
+  it("places holdings, manual entry, and risk panels inside the primary workspace", async () => {
+    usePortfolioStore.setState({ positions: [parsedPosition] });
+
+    const { container } = renderPortfolioPage();
+    const workspace = container.querySelector(".portfolio-main-workspace");
+
+    expect(workspace).toBeTruthy();
+    expect(workspace?.textContent).toContain("持仓明细");
+    expect(workspace?.textContent).toContain("新增持仓");
+    expect(workspace?.textContent).toContain("风险提示");
   });
 
   it("shows quote source warnings returned by portfolio analysis", async () => {
@@ -211,5 +276,49 @@ describe("PortfolioPage OCR upload", () => {
     expect(screen.getByText("最新财报收入同比增长")).toBeTruthy();
     expect(screen.getByText("贵州茅台公告").getAttribute("href")).toBe("https://example.com/report");
     expect(api.stockInsight).toHaveBeenCalledWith({ position: parsedPosition, horizon_days: 30 });
+  });
+
+  it("opens stock insight inline for an OCR watchlist holding row", async () => {
+    const ocrPosition: PortfolioPosition = {
+      symbol: "600460.SH",
+      name: "士兰微",
+      market: "CN",
+      quantity: 0,
+      cost_price: 44.8,
+      current_price: 44.8,
+      currency: "CNY",
+      source: "ocr-watchlist",
+      raw_fields: { 涨幅: "+7.10%" },
+    };
+    vi.mocked(api.stockInsight).mockResolvedValue({
+      status: "partial",
+      symbol: "600460.SH",
+      market: "CN",
+      as_of: "2026-06-28T00:00:00Z",
+      quote: null,
+      candles: [],
+      summary: "本地行情分析：截图识别到士兰微最新价 44.80。",
+      trend: ["截图涨幅 +7.10%"],
+      financials: [],
+      events: [],
+      risks: ["缺少数量和成本，无法计算仓位盈亏"],
+      citations: [],
+      data_warnings: ["missing OPENAI_API_KEY/NEWS_SEARCH_API_KEY", "position quantity/cost missing"],
+      model: "local-market",
+      disclaimer: "仅供研究参考",
+    });
+    usePortfolioStore.setState({ positions: [ocrPosition] });
+
+    const { container } = renderPortfolioPage();
+    fireEvent.click(await screen.findByLabelText("AI分析 士兰微"));
+
+    const inlinePanel = await screen.findByTestId("portfolio-inline-insight");
+    const activeRow = container.querySelector('tr[data-insight-active="true"]');
+
+    expect(inlinePanel.textContent).toContain("本地行情分析");
+    expect(inlinePanel.textContent).toContain("missing OPENAI_API_KEY/NEWS_SEARCH_API_KEY");
+    expect(activeRow?.textContent).toContain("600460.SH");
+    expect(container.querySelector(".portfolio-insight-panel")).toBeNull();
+    expect(api.stockInsight).toHaveBeenCalledWith({ position: ocrPosition, horizon_days: 30 });
   });
 });

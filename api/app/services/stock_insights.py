@@ -31,37 +31,30 @@ class StockInsightService:
     async def generate(self, request: StockInsightRequest) -> StockInsightResponse:
         symbol = normalize_symbol(request.position.symbol, request.position.market)
         as_of = datetime.now(UTC)
-        if not self.api_key:
-            return StockInsightResponse(
-                status="unavailable",
-                symbol=symbol,
-                market=request.position.market,
-                as_of=as_of,
-                summary="联网 AI 分析未配置：请设置 OPENAI_API_KEY 或 NEWS_SEARCH_API_KEY 后再使用单股联网分析。",
-                model=self.model,
-                data_warnings=["missing OPENAI_API_KEY/NEWS_SEARCH_API_KEY"],
-                disclaimer=DISCLAIMER,
-            )
-
         quote, quote_warning = await self._safe_quote(symbol)
         candles, candles_warning = await self._safe_candles(symbol, request.horizon_days)
         data_warnings = [warning for warning in (quote_warning, candles_warning) if warning]
 
-        try:
-            payload = await self._fetch_web_context(request, symbol, quote, candles)
-        except Exception as exc:
-            return StockInsightResponse(
-                status="failed" if not data_warnings else "partial",
+        if not self.api_key:
+            return _local_market_response(
+                request=request,
                 symbol=symbol,
-                market=request.position.market,
                 as_of=as_of,
                 quote=quote,
                 candles=candles,
-                summary=f"联网 AI 分析失败：{_error_detail(exc)}",
-                risks=["联网搜索或模型服务暂不可用时，不要依据缺失报告做交易判断。"],
+                data_warnings=[*data_warnings, "missing OPENAI_API_KEY/NEWS_SEARCH_API_KEY"],
+            )
+
+        try:
+            payload = await self._fetch_web_context(request, symbol, quote, candles)
+        except Exception as exc:
+            return _local_market_response(
+                request=request,
+                symbol=symbol,
+                as_of=as_of,
+                quote=quote,
+                candles=candles,
                 data_warnings=[*data_warnings, f"web search failed: {_error_detail(exc)}"],
-                model=self.model,
-                disclaimer=DISCLAIMER,
             )
 
         citations = _citations_from_payload(payload)
@@ -139,6 +132,69 @@ class StockInsightService:
         return _json_object_from_text(text)
 
 
+def _local_market_response(
+    *,
+    request: StockInsightRequest,
+    symbol: str,
+    as_of: datetime,
+    quote: QuoteSnapshot | None,
+    candles: list[CandleSnapshot],
+    data_warnings: list[str],
+) -> StockInsightResponse:
+    position = request.position
+    name = _clean_text(position.name) or symbol
+    price = quote.price if quote else position.current_price
+    change_text = _raw_change_text(position) or (_format_percent(quote.change_pct) if quote else "")
+    warnings = _dedupe_warnings(data_warnings)
+    risks = ["未启用联网搜索时，本地分析不包含新闻、公告、研报或财报核验。"]
+    trend: list[str] = []
+
+    if _is_missing_position_fields(position):
+        warnings.append("position quantity/cost missing; unable to calculate holding PnL")
+        risks.append("截图缺少真实持仓数量或成本价，无法判断仓位盈亏和组合风险贡献。")
+
+    if change_text:
+        trend.append(f"截图涨幅 {change_text}" if _raw_change_text(position) else f"行情涨跌幅 {change_text}")
+
+    if len(candles) >= 2:
+        first = candles[0].close
+        last = candles[-1].close
+        if first:
+            pct = (last - first) / first * 100
+            trend.append(f"{len(candles)}个交易日收盘价由{first:.2f}变为{last:.2f}，区间涨跌幅{pct:.2f}%。")
+    elif not candles:
+        trend.append("暂无真实K线，趋势判断仅基于截图或当前行情字段。")
+
+    if quote:
+        trend.append(f"行情源：{quote.source}，时间：{quote.as_of.isoformat()}。")
+    else:
+        risks.append("实时行情源暂不可用，最新价可能仅来自截图或用户录入。")
+
+    price_text = f"{price:.2f}" if isinstance(price, (int, float)) else "--"
+    summary_parts = [f"本地行情分析：{name}（{symbol}）当前可用最新价 {price_text}"]
+    if change_text:
+        summary_parts.append(f"涨跌幅 {change_text}")
+    summary = "，".join(summary_parts) + "。未启用或未完成联网搜索，暂不生成新闻、公告、财报引用。"
+
+    return StockInsightResponse(
+        status="partial",
+        symbol=symbol,
+        market=position.market,
+        as_of=as_of,
+        quote=quote,
+        candles=candles,
+        summary=summary,
+        trend=trend,
+        financials=[],
+        events=[],
+        risks=risks,
+        citations=[],
+        data_warnings=_dedupe_warnings(warnings),
+        model="local-market",
+        disclaimer=DISCLAIMER,
+    )
+
+
 def _build_stock_insight_prompt(
     request: StockInsightRequest,
     symbol: str,
@@ -199,6 +255,40 @@ def _string_list(value: object) -> list[str]:
 
 def _clean_text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _raw_change_text(position: Any) -> str:
+    raw_fields = getattr(position, "raw_fields", None) or {}
+    if not isinstance(raw_fields, Mapping):
+        return ""
+    for key in ("涨幅", "涨跌幅", "change_pct"):
+        value = _clean_text(raw_fields.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _format_percent(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{numeric:+.2f}%"
+
+
+def _is_missing_position_fields(position: Any) -> bool:
+    raw_fields = getattr(position, "raw_fields", None) or {}
+    raw_type = _clean_text(raw_fields.get("识别类型")) if isinstance(raw_fields, Mapping) else ""
+    source = _clean_text(getattr(position, "source", ""))
+    return source == "ocr-watchlist" or raw_type == "自选/行情列表" or float(getattr(position, "quantity", 0) or 0) <= 0
+
+
+def _dedupe_warnings(warnings: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for warning in warnings:
+        if warning and warning not in deduped:
+            deduped.append(warning)
+    return deduped
 
 
 def _error_detail(exc: Exception) -> str:

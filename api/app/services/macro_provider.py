@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -17,7 +18,7 @@ from app.schemas.macro_xray import (
     MacroXrayUniverse,
 )
 from app.services.macro import MacroDataService
-from app.services.macro_xray import MacroXrayService
+from app.services.macro_xray import INDEX_TARGETS, MacroXrayService
 
 
 class MacroProvider(Protocol):
@@ -114,6 +115,8 @@ class DangInvestMacroProvider:
         lookback: int,
         target_source: str,
     ) -> MacroXrayTargetsResponse:
+        if universe_type == "index":
+            return self._index_targets_response(lookback=lookback)
         query = {
             "universe_type": universe_type,
             "lookback": str(lookback),
@@ -210,10 +213,15 @@ class DangInvestMacroProvider:
             "quarters": len(points),
             "lookback": int(raw_period.get("lookbackYears") or 0),
         }
+        sample_count = int(raw_sample.get("count") or 0)
+        current_constituent_count = int(raw_sample.get("currentConstituentCount") or 0)
+        sample_coverage = _coverage_value(raw_sample.get("coverage"))
+        if sample_coverage <= 0 and current_constituent_count > 0:
+            sample_coverage = sample_count / current_constituent_count
         sample_payload = {
             **raw_sample,
-            "count": int(raw_sample.get("count") or 0),
-            "coverage": float(raw_sample.get("coverage") or 0.0),
+            "count": sample_count,
+            "coverage": sample_coverage,
             "source": str(raw_sample.get("method") or "danginvest"),
         }
         response = MacroXrayResponse(
@@ -225,14 +233,43 @@ class DangInvestMacroProvider:
             sample=MacroXraySample(**sample_payload),
             latest=latest,
             points=points,
-            nominalGdp=payload.get("nominalGdp") or [],
-            crossIndex=payload.get("crossIndex") or [],
-            insights=payload.get("insights") or [],
-            diagnostics=payload.get("diagnostics") or [],
+            nominalGdp=_xray_points_from_payload(payload.get("nominalGdp")),
+            crossIndex=_xray_points_from_payload(payload.get("crossIndex")),
+            insights=_insights_from_payload(payload.get("insights")),
+            diagnostics=_diagnostics_from_payload(payload.get("diagnostics")),
             source_status=[_source_status("danginvest_macro_xray", "live", "macro-xray")],
             methodology=str(raw_sample.get("method") or "DangInvest X-Ray compatible payload."),
         )
         return response
+
+    def _index_targets_response(self, *, lookback: int) -> MacroXrayTargetsResponse:
+        targets = [
+            MacroXrayTarget(
+                id=f"index:{code}",
+                type="index",
+                code=code,
+                name=name,
+                source="static-index-targets",
+                status="live",
+            )
+            for code, name in INDEX_TARGETS.items()
+        ]
+        return MacroXrayTargetsResponse(
+            ts=datetime.now(UTC),
+            status="live",
+            items=targets,
+            targets=targets,
+            source_status=[
+                MacroSourceStatus(
+                    name="danginvest_macro_xray_index_targets",
+                    status="live",
+                    source="static-index-targets",
+                    detail=f"static index targets for DangInvest X-Ray, lookback={lookback}",
+                    as_of=datetime.now(UTC),
+                )
+            ],
+            methodology="DangInvest does not expose dynamic index targets; static broad-index presets are used.",
+        )
 
     def _targets_response(self, payload: dict[str, Any], *, universe_type: str) -> MacroXrayTargetsResponse:
         raw_targets = payload.get("targets") if isinstance(payload.get("targets"), list) else payload.get("items")
@@ -340,6 +377,92 @@ def _xray_point(item: dict[str, Any]) -> MacroXrayPoint:
         "date": str(item.get("date") or item.get("periodEnd") or item.get("asOfDate") or ""),
     }
     return MacroXrayPoint(**payload)
+
+
+def _coverage_value(value: Any) -> float:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, dict):
+        numbers = [float(item) for item in value.values() if isinstance(item, int | float)]
+        return sum(numbers) / len(numbers) if numbers else 0.0
+    return 0.0
+
+
+def _xray_points_from_payload(value: Any) -> list[MacroXrayPoint]:
+    if isinstance(value, list):
+        return [_xray_point(item) for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        return []
+    if isinstance(value.get("points"), list):
+        unit = value.get("unit")
+        return [
+            _xray_point({**item, "unit": unit} if unit is not None else item)
+            for item in value["points"]
+            if isinstance(item, dict)
+        ]
+    points: list[MacroXrayPoint] = []
+    for key, item in value.items():
+        if isinstance(item, dict):
+            points.append(_xray_point({**item, "series": str(key)}))
+    return points
+
+
+def _insights_from_payload(value: Any) -> list[dict[str, str]]:
+    if isinstance(value, list):
+        insights: list[dict[str, str]] = []
+        for item in value:
+            if isinstance(item, dict):
+                insights.append(
+                    {
+                        "level": str(item.get("level") or item.get("severity") or item.get("tone") or "info"),
+                        "title": str(item.get("title") or item.get("label") or item.get("headline") or "Insight"),
+                        "detail": str(item.get("detail") or item.get("text") or item.get("summary") or ""),
+                    }
+                )
+        return insights
+    if not isinstance(value, dict):
+        return []
+
+    insights = []
+    headline = value.get("headline")
+    if headline:
+        facts = value.get("facts") if isinstance(value.get("facts"), list) else []
+        detail = value.get("realEstateReadthrough") or value.get("equityStyleReadthrough") or "；".join(map(str, facts[:3]))
+        insights.append({"level": str(value.get("tone") or "info"), "title": str(headline), "detail": str(detail or "")})
+    diagnoses = value.get("diagnoses")
+    if isinstance(diagnoses, list):
+        for item in diagnoses:
+            if isinstance(item, dict):
+                insights.append(
+                    {
+                        "level": str(item.get("severity") or "info"),
+                        "title": str(item.get("label") or item.get("id") or "Diagnosis"),
+                        "detail": str(item.get("text") or ""),
+                    }
+                )
+    return insights
+
+
+def _diagnostics_from_payload(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, sort_keys=True) for item in value]
+    if not isinstance(value, dict):
+        return []
+    diagnostics: list[str] = []
+    for key in ("requestedQuarters", "fetchedRows", "parsedRows", "targetRows", "returnedPoints"):
+        if key in value:
+            diagnostics.append(f"{key}: {value[key]}")
+    filters = value.get("filters")
+    if isinstance(filters, dict):
+        compact = {key: filters.get(key) for key in ("universeType", "universeCode", "sectorScope", "periodEnd", "asOfDate") if key in filters}
+        if compact:
+            diagnostics.append(f"filters: {json.dumps(compact, ensure_ascii=False, sort_keys=True)}")
+    selected = value.get("selectedVariant")
+    if isinstance(selected, dict):
+        compact = {key: selected.get(key) for key in ("calcVersion", "sampleMethod", "latestPeriod", "latestAsOfDate") if key in selected}
+        if compact:
+            diagnostics.append(f"selectedVariant: {json.dumps(compact, ensure_ascii=False, sort_keys=True)}")
+    return diagnostics or [json.dumps(value, ensure_ascii=False, sort_keys=True)]
 
 
 def _target(item: dict[str, Any]) -> MacroXrayTarget:

@@ -159,6 +159,71 @@ async def test_index_candles_use_yahoo_before_akshare() -> None:
     assert service.akshare_called is False
 
 
+async def test_index_candles_fall_back_when_yahoo_returns_too_few_points() -> None:
+    class IndexCandleService(MarketDataService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.akshare_called = False
+
+        async def _fetch_yahoo_candles(self, symbol: str, period: str, limit: int):
+            return self._sample_candles(symbol, period, 1)
+
+        def _fetch_akshare_candles_sync(self, symbol: str, period: str, limit: int):
+            self.akshare_called = True
+            return [
+                candle.model_copy(update={"source": "akshare-index-fallback"})
+                for candle in self._sample_candles(symbol, period, 3)
+            ]
+
+    service = IndexCandleService()
+
+    candles = await service.candles("399006.SZ", "daily", 20)
+
+    assert len(candles) == 3
+    assert candles[-1].source == "akshare-index-fallback"
+    assert service.akshare_called is True
+
+
+async def test_index_akshare_candles_use_dedicated_index_tables() -> None:
+    class IndexAkShare(FakeAkShare):
+        def __init__(self) -> None:
+            self.cn_symbol = ""
+            self.hk_symbol = ""
+
+        def stock_zh_index_daily(self, symbol: str) -> FakeTable:
+            self.cn_symbol = symbol
+            return FakeTable(
+                [
+                    {"date": "2026-06-18", "open": 3980.0, "high": 4020.0, "low": 3970.0, "close": 4010.0, "volume": 1000},
+                    {"date": "2026-06-19", "open": 4010.0, "high": 4050.0, "low": 4000.0, "close": 4040.0, "volume": 1100},
+                ]
+            )
+
+        def stock_hk_index_daily_sina(self, symbol: str) -> FakeTable:
+            self.hk_symbol = symbol
+            return FakeTable(
+                [
+                    {"date": "2026-06-18", "open": 4400.0, "high": 4440.0, "low": 4390.0, "close": 4420.0, "volume": 2000},
+                    {"date": "2026-06-19", "open": 4420.0, "high": 4500.0, "low": 4410.0, "close": 4499.0, "volume": 2100},
+                ]
+            )
+
+    class YahooDownService(MarketDataService):
+        async def _fetch_yahoo_candles(self, symbol: str, period: str, limit: int):
+            raise RuntimeError("yahoo down")
+
+    akshare = IndexAkShare()
+    service = YahooDownService(akshare_module=akshare)
+
+    cn_candles = await service.candles("399006.SZ", "daily", 20)
+    hk_candles = await service.candles("HSTECH.HK", "daily", 20)
+
+    assert akshare.cn_symbol == "sz399006"
+    assert cn_candles[-1].close == 4040.0
+    assert akshare.hk_symbol == "HSTECH"
+    assert hk_candles[-1].close == 4499.0
+
+
 async def test_quotes_fetch_symbols_concurrently() -> None:
     class SlowQuoteService(MarketDataService):
         def __init__(self) -> None:

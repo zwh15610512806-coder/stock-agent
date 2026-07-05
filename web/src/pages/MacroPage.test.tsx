@@ -51,6 +51,8 @@ const zh = {
   industry: "\u4e2a\u80a1\u884c\u4e1a",
   etf: "\u884c\u4e1a ETF",
   dataQuality: "\u6570\u636e\u8d28\u91cf\u8bca\u65ad",
+  sampleCount: "\u6837\u672c\u6570",
+  coverage: "\u8986\u76d6\u7387",
   dr007: "DR007\uff08\u94f6\u884c\u95f47\u5929\u56de\u8d2d\u5229\u7387\uff09",
   xray: "X-Ray\uff08\u4f01\u4e1a\u8d26\u672c\u900f\u89c6\uff09",
 };
@@ -249,7 +251,7 @@ describe("MacroPage workbench", () => {
 
     expect(await screen.findByText(zh.macroWeather)).toBeTruthy();
     expect(screen.getByText(zh.ledger)).toBeTruthy();
-    expect(screen.getByText(zh.profitGap)).toBeTruthy();
+    expect(await screen.findByText(zh.profitGap)).toBeTruthy();
     expect(screen.getByText(zh.compass)).toBeTruthy();
     expect(screen.getByText(zh.thermometer)).toBeTruthy();
     expect(screen.getByText(zh.trendMap)).toBeTruthy();
@@ -263,6 +265,7 @@ describe("MacroPage workbench", () => {
     expect(screen.getAllByText(zh.unavailable).length).toBeGreaterThan(0);
     expect(screen.queryByText("M1-M2 YoY Spread")).toBeNull();
     expect(screen.queryByText("unavailable")).toBeNull();
+    expect(api.macroDashboard).not.toHaveBeenCalled();
   });
 
   it("renders the DangInvest-style macro weather workbench modules and controls", async () => {
@@ -286,7 +289,12 @@ describe("MacroPage workbench", () => {
     expect(screen.getByText(zh.broadIndex)).toBeTruthy();
     expect(screen.getByText(zh.industry)).toBeTruthy();
     expect(screen.getByText(zh.etf)).toBeTruthy();
-    expect(screen.getByText(zh.dataQuality)).toBeTruthy();
+    expect(screen.queryByText(zh.sampleCount)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: zh.dataQuality }));
+    expect(screen.getByText(zh.sampleCount)).toBeTruthy();
+    expect(screen.getByText(zh.coverage)).toBeTruthy();
+    expect(screen.getByText("233")).toBeTruthy();
+    expect(screen.getByText("94.0%")).toBeTruthy();
     for (const label of ["6\u671f", "16\u671f", "24\u671f", "32\u671f", "40\u671f"]) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }

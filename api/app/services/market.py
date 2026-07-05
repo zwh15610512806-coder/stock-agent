@@ -851,7 +851,9 @@ class MarketDataService:
                     timeout=self.dashboard_source_timeout_seconds,
                 )
                 closes = [round(candle.close, 4) for candle in candles[-18:] if candle.close > 0]
-                return symbol, closes or None, None
+                if len(closes) >= 2:
+                    return symbol, closes, None
+                return symbol, None, f"insufficient candle points ({len(closes)})"
             except Exception as exc:
                 detail = f"timed out after {self.dashboard_source_timeout_seconds:g}s" if isinstance(exc, TimeoutError) else str(exc)
                 return symbol, None, detail
@@ -897,10 +899,19 @@ class MarketDataService:
     async def _fetch_primary_candles(self, symbol: str, period: str, limit: int) -> list[CandleSnapshot]:
         market = infer_market(symbol)
         if market in {"CN", "HK"} and symbol in INDEX_SYMBOL_SET:
+            yahoo_candles: list[CandleSnapshot] = []
             try:
-                return await self._fetch_yahoo_candles(symbol, period, limit)
+                yahoo_candles = await self._fetch_yahoo_candles(symbol, period, limit)
+                if len(yahoo_candles) >= min(2, max(1, limit)):
+                    return yahoo_candles
             except Exception:
                 pass
+            try:
+                return await asyncio.to_thread(self._fetch_akshare_candles_sync, symbol, period, limit)
+            except Exception:
+                if yahoo_candles:
+                    return yahoo_candles
+                raise
         if market in {"CN", "HK"}:
             try:
                 return await asyncio.to_thread(self._fetch_akshare_candles_sync, symbol, period, limit)
@@ -992,6 +1003,15 @@ class MarketDataService:
         end_date: str,
     ) -> object:
         code = _plain_code(symbol)
+        if market == "HK" and symbol in INDEX_SYMBOL_SET:
+            try:
+                return akshare.stock_hk_index_daily_sina(symbol=code)
+            except Exception:
+                if hasattr(akshare, "stock_hk_index_daily_em"):
+                    try:
+                        return akshare.stock_hk_index_daily_em(symbol=code)
+                    except Exception:
+                        pass
         if market == "HK":
             try:
                 return akshare.stock_hk_hist(
@@ -1004,6 +1024,21 @@ class MarketDataService:
             except AttributeError:
                 return akshare.stock_hk_daily(symbol=code, adjust="")
         if symbol in {"000001.SH", "399001.SZ", "399006.SZ"}:
+            provider_symbol = ("sz" if symbol.endswith(".SZ") else "sh") + code
+            if hasattr(akshare, "stock_zh_index_daily"):
+                try:
+                    return akshare.stock_zh_index_daily(symbol=provider_symbol)
+                except Exception:
+                    pass
+            if hasattr(akshare, "stock_zh_index_daily_tx"):
+                try:
+                    return akshare.stock_zh_index_daily_tx(
+                        symbol=provider_symbol,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                except Exception:
+                    pass
             try:
                 return akshare.index_zh_a_hist(
                     symbol=code,

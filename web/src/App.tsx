@@ -26,6 +26,7 @@ const navItems = [
   { to: "/macro", label: "宏观", icon: CircleGauge },
   { to: "/stocks", label: "选股", icon: TrendingUp },
   { to: "/portfolio", label: "我的持仓", icon: Layers },
+  { to: "/ai", label: "AI研报", icon: Sparkles },
   { to: "/search", label: "检索", icon: BookOpen },
 ];
 

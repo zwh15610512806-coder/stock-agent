@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import * as echarts from "echarts";
 import {
   Activity,
-  AlertTriangle,
   BarChart3,
   Compass,
   Database,
@@ -23,14 +22,12 @@ import { readPersistedQuery, writePersistedQuery } from "../lib/persisted-query"
 import type {
   DashboardCacheStatus,
   DashboardSourceStatus,
-  MacroDashboardResponse,
   MacroTimeseriesResponse,
   MacroTimeseriesSeries,
   MacroXrayPoint,
   MacroXrayResponse,
   MacroXrayTarget,
   MacroXrayTargetsResponse,
-  SourceMetric,
 } from "../lib/types";
 
 const XRAY_LABEL = "X-Ray（企业账本透视）";
@@ -138,7 +135,6 @@ type ChartOption = echarts.EChartsOption;
 
 const MACRO_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MACRO_QUERY_STALE_MS = 60 * 60 * 1000;
-const MACRO_DASHBOARD_SNAPSHOT_KEY = "macro-dashboard";
 const MACRO_TIMESERIES_SNAPSHOT_KEY = `macro-timeseries:${DEFAULT_SERIES_IDS.join(",")}:2006-01-01:2000`;
 
 export function MacroPage() {
@@ -146,24 +142,12 @@ export function MacroPage() {
   const [targetType, setTargetType] = useState("index");
   const [scope, setScope] = useState("non_financial");
   const [periodWindow, setPeriodWindow] = useState(16);
+  const [qualityOpen, setQualityOpen] = useState(false);
   const [sandboxIds, setSandboxIds] = useState(["cn.money.m1_yoy", "cn.money.m1_minus_m2_yoy", "cn.ppi.yoy"]);
   const target = parseTargetValue(targetValue);
   const macroXrayTargetsSnapshotKey = `macro-xray-targets:${targetType}:6:stock_basic_full_v1`;
   const macroXraySnapshotKey = `macro-xray:${target.universe_type}:${target.universe_code}:${scope}:latest:40:6`;
 
-  const dashboard = useQuery({
-    queryKey: ["macro-dashboard"],
-    queryFn: () => api.macroDashboard(),
-    initialData: () =>
-      readPersistedQuery<MacroDashboardResponse>(MACRO_DASHBOARD_SNAPSHOT_KEY, {
-        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
-      })?.data,
-    initialDataUpdatedAt: () =>
-      readPersistedQuery<MacroDashboardResponse>(MACRO_DASHBOARD_SNAPSHOT_KEY, {
-        maxAgeMs: MACRO_SNAPSHOT_MAX_AGE_MS,
-      })?.updatedAt,
-    staleTime: MACRO_QUERY_STALE_MS,
-  });
   const timeseries = useQuery({
     queryKey: ["macro-timeseries"],
     queryFn: () => api.macroTimeseries({ series_ids: DEFAULT_SERIES_IDS, start: "2006-01-01", max_points: 2000 }),
@@ -212,11 +196,6 @@ export function MacroPage() {
     staleTime: MACRO_QUERY_STALE_MS,
   });
   useEffect(() => {
-    if (dashboard.data) {
-      writePersistedQuery(MACRO_DASHBOARD_SNAPSHOT_KEY, dashboard.data, dashboard.dataUpdatedAt || Date.now());
-    }
-  }, [dashboard.data, dashboard.dataUpdatedAt]);
-  useEffect(() => {
     if (timeseries.data) {
       writePersistedQuery(MACRO_TIMESERIES_SNAPSHOT_KEY, timeseries.data, timeseries.dataUpdatedAt || Date.now());
     }
@@ -232,19 +211,17 @@ export function MacroPage() {
     }
   }, [macroXraySnapshotKey, xray.data, xray.dataUpdatedAt]);
 
-  const dashboardData = dashboard.data;
   const timeseriesData = timeseries.data;
   const xrayData = xray.data;
   const seriesMap = useMemo(() => mapSeries(timeseriesData), [timeseriesData]);
   const targetItems = normalizeTargets(targets.data).length ? normalizeTargets(targets.data) : fallbackTargets();
   const allStatuses = mergeStatuses([
-    ...(dashboardData?.source_status || []),
     ...(timeseriesData?.source_status || []),
     ...(xrayData?.source_status || []),
     ...(targets.data?.source_status || []),
   ]);
-  const hasError = dashboard.isError || timeseries.isError || xray.isError || targets.isError;
-  const cacheStatus = dashboard.isPending ? "loading" : dashboardData?.cache_status || "unavailable";
+  const hasError = timeseries.isError || xray.isError || targets.isError;
+  const cacheStatus = macroWorkbenchStatus(timeseriesData, xrayData, timeseries.isPending || xray.isPending);
   const latest = xrayData?.latest || null;
 
   return (
@@ -256,12 +233,11 @@ export function MacroPage() {
           <p>基于宏观公开源与 {XRAY_LABEL} 混合适配层，观察流动性、通胀、信用、利率、汇率与企业账本传导。</p>
         </div>
         <div className="market-hero-actions">
-          <span className="market-clock">更新 {formatDateTime(dashboardData?.as_of || timeseriesData?.ts || xrayData?.ts)}</span>
-          <SourceStatusBadge status={cacheStatus as DashboardCacheStatus | "loading"} label={statusLabel(cacheStatus)} />
+          <span className="market-clock">更新 {formatDateTime(timeseriesData?.ts || xrayData?.ts)}</span>
+          <SourceStatusBadge status={cacheStatus} label={statusLabel(cacheStatus)} />
           <button
             className="terminal-button soft market-refresh"
             onClick={() => {
-              dashboard.refetch();
               timeseries.refetch();
               xray.refetch();
               targets.refetch();
@@ -275,10 +251,10 @@ export function MacroPage() {
       </section>
 
       {hasError ? (
-        <div className="source-warning">{apiFailureMessage(dashboard.error || timeseries.error || xray.error || targets.error, "宏观工作台")}</div>
+        <div className="source-warning">{apiFailureMessage(timeseries.error || xray.error || targets.error, "宏观工作台")}</div>
       ) : null}
 
-      <MacroWeatherStrip dashboard={dashboardData} timeseries={timeseriesData} loading={dashboard.isPending || timeseries.isPending} />
+      <MacroWeatherStrip timeseries={timeseriesData} loading={timeseries.isPending} />
 
       <section className="data-panel macro-xray-panel macro-chain-panel">
         <div className="panel-head macro-panel-head">
@@ -330,11 +306,17 @@ export function MacroPage() {
               </select>
             </label>
             <span className="macro-quarter-pill">{xrayData?.period.latest || xrayData?.period.label || "最新季度"}</span>
-            <button className="terminal-button soft macro-quality-button" type="button">
+            <button
+              className={`terminal-button soft macro-quality-button${qualityOpen ? " active" : ""}`}
+              type="button"
+              aria-expanded={qualityOpen}
+              onClick={() => setQualityOpen((value) => !value)}
+            >
               数据质量诊断
             </button>
           </div>
         </div>
+        <QualityDrawer xray={xrayData} open={qualityOpen} />
         <LedgerChain latest={latest} loading={xray.isPending} />
         <MetricTransmissionGrid latest={latest} />
       </section>
@@ -406,20 +388,12 @@ export function MacroPage() {
         option={timeseriesLineOption(timeseriesData, sandboxIds)}
       />
 
-      <SourcePanel statuses={allStatuses} disclaimer={timeseriesData?.disclaimer || dashboardData?.disclaimer || ""} />
+      <SourcePanel statuses={allStatuses} disclaimer={timeseriesData?.disclaimer || ""} />
     </div>
   );
 }
 
-function MacroWeatherStrip({
-  dashboard,
-  timeseries,
-  loading,
-}: {
-  dashboard?: { rates: SourceMetric[]; indicators: SourceMetric[]; bond_yields: SourceMetric[]; fx_rates: SourceMetric[] };
-  timeseries?: MacroTimeseriesResponse;
-  loading: boolean;
-}) {
+function MacroWeatherStrip({ timeseries, loading }: { timeseries?: MacroTimeseriesResponse; loading: boolean }) {
   const pills = [
     metricPill("cn.rate.cn10y", latestSeries(timeseries, "cn.rate.cn10y"), "%"),
     metricPill("us.rate.us10y", latestSeries(timeseries, "us.rate.us10y"), "%"),
@@ -428,20 +402,13 @@ function MacroWeatherStrip({
     metricPill("us.vix", latestSeries(timeseries, "us.vix"), ""),
     metricPill("cn.money.m1_minus_m2_yoy", latestSeries(timeseries, "cn.money.m1_minus_m2_yoy"), "ppt"),
   ];
-  const fallback = [...(dashboard?.rates || []), ...(dashboard?.indicators || []), ...(dashboard?.bond_yields || []), ...(dashboard?.fx_rates || [])].slice(0, 4);
   return (
     <section className="macro-weather-strip">
-      <div className="macro-alert">
-        <AlertTriangle size={16} />
-        <span>基于估算的观测界限。部分宏观历史数据首次发布日期存在轻微估计偏差；接口不可用时会降级到公开源。</span>
-      </div>
       <div className="macro-pill-strip">
         {loading ? <div className="market-empty compact macro-loading-row">正在连接宏观公开源</div> : null}
-        {!loading && pills.every((pill) => pill.value === null)
-          ? fallback.map((item) => (
-              <MetricPill key={item.name} label={displayMetricName(item.name)} value={item.value} unit={item.unit} status={item.status} />
-            ))
-          : pills.map((pill) => <MetricPill key={pill.label} {...pill} />)}
+        {pills.map((pill) => (
+          <MetricPill key={pill.label} {...pill} />
+        ))}
       </div>
     </section>
   );
@@ -457,6 +424,46 @@ function MetricPill({ label, value, unit, status }: { label: string; value: numb
   );
 }
 
+function QualityDrawer({ xray, open }: { xray?: MacroXrayResponse; open: boolean }) {
+  if (!open) {
+    return null;
+  }
+  const diagnostics = (xray?.diagnostics || []).filter(Boolean).slice(0, 5);
+  const metrics = [
+    ["样本数", xray?.sample.count ?? "--"],
+    ["覆盖率", formatCoverage(xray?.sample.coverage)],
+    ["最新报告期", xray?.period.latest || xray?.period.label || "--"],
+    ["来源", xray?.sample.source || "--"],
+  ];
+
+  return (
+    <section className="macro-quality-drawer" aria-label="数据质量诊断明细">
+      <div className="macro-quality-metrics">
+        {metrics.map(([label, value]) => (
+          <article className="macro-quality-item" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </article>
+        ))}
+      </div>
+      <div className="macro-quality-diagnostics">
+        <span>方法口径</span>
+        <p>{displayMethodology(xray?.methodology)}</p>
+        <span>诊断摘要</span>
+        {diagnostics.length ? (
+          <ul>
+            {diagnostics.map((item, index) => (
+              <li key={`${item}-${index}`}>{item}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>暂无额外诊断。</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function LedgerChain({ latest, loading }: { latest: MacroXrayPoint | null; loading: boolean }) {
   const items = [
     { label: "订单温度", value: latest?.orderBacklogYoy, unit: "%", detail: "合同负债/订单前置信号" },
@@ -465,10 +472,22 @@ function LedgerChain({ latest, loading }: { latest: MacroXrayPoint | null; loadi
     { label: "产能利用", value: latest?.equipmentRenewalRatio, unit: "x", detail: "设备更新与折旧" },
     { label: "设备更新", value: latest?.fixedAssetsYoy, unit: "%", detail: "固定资产与扩产线索" },
   ];
+  if (loading) {
+    return (
+      <div className="macro-ledger-grid">
+        <div className="market-empty compact macro-loading-row">正在计算 {XRAY_LABEL} 指标</div>
+      </div>
+    );
+  }
+  if (!latest) {
+    return (
+      <div className="macro-ledger-grid">
+        <div className="market-empty compact macro-loading-row">暂无可用企业账本数据</div>
+      </div>
+    );
+  }
   return (
     <div className="macro-ledger-grid">
-      {loading ? <div className="market-empty compact macro-loading-row">正在计算 {XRAY_LABEL} 指标</div> : null}
-      {!loading && !latest ? <div className="market-empty compact macro-loading-row">暂无可用企业账本数据</div> : null}
       {items.map((item, index) => (
         <article className="macro-ledger-node" key={item.label}>
           <small>0{index + 1}</small>
@@ -482,6 +501,9 @@ function LedgerChain({ latest, loading }: { latest: MacroXrayPoint | null; loadi
 }
 
 function MetricTransmissionGrid({ latest }: { latest: MacroXrayPoint | null }) {
+  if (!latest) {
+    return null;
+  }
   const cards = [
     ["周期现金", latest?.cashConversionRatio, "x", "销售变现能力"],
     ["利润剪刀差", latest?.profitRevenueGap, "%", "利润弹性"],
@@ -843,7 +865,7 @@ function metricPill(seriesId: string, series: MacroTimeseriesSeries | undefined,
   return {
     label: SERIES_LABELS[seriesId] || displaySeriesName(series),
     value,
-    unit: series?.unit === "pct" ? "%" : series?.unit || fallbackUnit,
+    unit: metricDisplayUnit(series?.unit, fallbackUnit),
     status: series?.status || "unavailable",
     change,
   };
@@ -939,6 +961,38 @@ function displayMethodology(value: string | null | undefined): string {
   return value.replace("X-Ray", XRAY_LABEL);
 }
 
+function macroWorkbenchStatus(
+  timeseries: MacroTimeseriesResponse | undefined,
+  xray: MacroXrayResponse | undefined,
+  loading: boolean,
+): DashboardCacheStatus | "loading" {
+  if (loading) {
+    return "loading";
+  }
+  const liveSeries = (timeseries?.series || []).some((item) => item.status === "live" && item.points.length > 0);
+  const staleSeries = (timeseries?.series || []).some((item) => item.status === "stale");
+  const liveXray = xray?.status === "live" && Boolean(xray.latest);
+  const staleXray = xray?.status === "stale";
+  if (liveSeries && liveXray) {
+    return "live";
+  }
+  if (liveSeries || liveXray) {
+    return "partial";
+  }
+  if (staleSeries || staleXray) {
+    return "stale";
+  }
+  return "unavailable";
+}
+
+function formatCoverage(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "--";
+  }
+  const pct = Math.abs(value) <= 1 ? value * 100 : value;
+  return `${formatNumber(pct, 1)}%`;
+}
+
 function statusLabel(status: string | null | undefined): string {
   const labels: Record<string, string> = {
     loading: "加载中",
@@ -990,6 +1044,22 @@ function unitLabel(unit: string): string {
   }
   if (unit === "pct") {
     return "%";
+  }
+  return unit;
+}
+
+function metricDisplayUnit(unit: string | undefined, fallbackUnit: string): string {
+  if (!unit || unit === "num") {
+    return fallbackUnit;
+  }
+  if (unit === "pct") {
+    return "%";
+  }
+  if (unit === "ppt") {
+    return "ppt";
+  }
+  if (["cny_per_usd", "index", "points"].includes(unit)) {
+    return "";
   }
   return unit;
 }

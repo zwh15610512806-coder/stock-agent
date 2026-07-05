@@ -180,7 +180,7 @@ async def test_stock_insight_uses_web_search_and_market_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stock_insight_returns_unavailable_without_web_search_key() -> None:
+async def test_stock_insight_returns_local_market_analysis_without_web_search_key() -> None:
     service = StockInsightService(
         api_key="",
         api_base="https://api.openai.test/v1",
@@ -191,9 +191,40 @@ async def test_stock_insight_returns_unavailable_without_web_search_key() -> Non
 
     result = await service.generate(StockInsightRequest(position=_stock_position(), horizon_days=30))
 
-    assert result.status == "unavailable"
-    assert "OPENAI_API_KEY" in result.summary
+    assert result.status == "partial"
+    assert "本地行情分析" in result.summary
+    assert result.quote is not None
+    assert len(result.candles) == 30
+    assert "missing OPENAI_API_KEY/NEWS_SEARCH_API_KEY" in result.data_warnings
     assert result.citations == []
+
+
+@pytest.mark.asyncio
+async def test_stock_insight_local_analysis_warns_for_ocr_watchlist_missing_position_fields() -> None:
+    service = StockInsightService(
+        api_key="",
+        api_base="https://api.openai.test/v1",
+        model="gpt-4.1-mini",
+        timeout_seconds=3,
+        market_service=FakeInsightMarketService(),
+    )
+    position = PortfolioPosition(
+        symbol="600519.SH",
+        name="贵州茅台",
+        market="CN",
+        quantity=0,
+        cost_price=1200,
+        current_price=1200,
+        currency="CNY",
+        source="ocr-watchlist",
+        raw_fields={"涨幅": "+1.00%", "识别类型": "自选/行情列表"},
+    )
+
+    result = await service.generate(StockInsightRequest(position=position, horizon_days=30))
+
+    assert result.status == "partial"
+    assert any("position quantity/cost missing" in warning for warning in result.data_warnings)
+    assert any("截图涨幅 +1.00%" in item for item in result.trend)
 
 
 @pytest.mark.asyncio
@@ -238,3 +269,27 @@ async def test_stock_insight_marks_partial_when_market_data_fails_but_search_suc
     assert result.quote is None
     assert result.candles == []
     assert any("quote down" in warning for warning in result.data_warnings)
+
+
+@pytest.mark.asyncio
+async def test_stock_insight_falls_back_to_local_market_analysis_when_web_search_fails() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "search down"})
+
+    service = StockInsightService(
+        api_key="test-key",
+        api_base="https://api.openai.test/v1",
+        model="gpt-4.1-mini",
+        timeout_seconds=3,
+        market_service=FakeInsightMarketService(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await service.generate(StockInsightRequest(position=_stock_position(), horizon_days=30))
+
+    assert result.status == "partial"
+    assert "本地行情分析" in result.summary
+    assert result.quote is not None
+    assert len(result.candles) == 30
+    assert any("web search failed" in warning for warning in result.data_warnings)
+    assert result.citations == []
